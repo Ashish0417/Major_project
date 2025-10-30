@@ -1,0 +1,18 @@
+# === Core LLM / LangChain stack ===
+langchain==0.0.352
+langchain-core==0.1.23
+langchain-community==0.0.20
+langsmith==0.0.87
+
+# === Google Generative AI (Gemini) ===
+google-generativeai==0.3.2
+google-ai-generativelanguage==0.4.0
+google-auth==2.42.0
+google-api-core==2.28.1
+googleapis-common-protos==1.71.0
+
+# === Amadeus (Travel APIs) ===
+amadeus==2.0.0
+
+# === Utility & framework packages ===
+python-dotenv==1.0.0

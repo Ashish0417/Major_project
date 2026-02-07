@@ -1,627 +1,914 @@
 # """
-# LangChain 0.3.x Agentic AI - Travel Itinerary Generator
-# Modern Direct Google Gemini Integration (No Bridge Package Needed)
-# LLM: Google Gemini Pro (100% FREE)
-# Framework: LangChain 0.3.x with Agents & Tools
-# Pattern: ReAct (Reasoning + Acting)
+# Complete Travel Itinerary Orchestrator
+# Generates day-by-day travel plans with flights, hotels, restaurants, and activities
+# Uses direct tool calls (no parsing errors) + OR-Tools optimizer
 # """
 
 # import os
-# from typing import List, Dict, Any
+# from datetime import datetime, timedelta
 # from dotenv import load_dotenv
 
-# import google.generativeai as genai
-# from langchain_core.tools import tool
-# from langchain.agents import initialize_agent, Tool, AgentType
-# from langchain_core.messages import HumanMessage, AIMessage
+# from langchain_google_genai import ChatGoogleGenerativeAI
+# from langchain.schema import HumanMessage
+
+# # Import existing agents and utilities
+# from flight_agent import FlightAgent
+# from accommodation_agent import AccommodationAgent
+# from restaurant_agent import RestaurantAgent
+# from activity_agent import ActivityAgent
+# from optimizer import ItineraryOptimizer
+# from trend_analyzer import TrendAnalyzer
+# from user_profile import create_sample_profile, UserProfile, TripDates
 
 # load_dotenv()
 
 
-# class ModernLangChainGeminiAgent:
-#     """
-#     Modern LangChain 0.3.x Agentic AI using Google Gemini
-#     Direct integration with google-generativeai SDK
-#     """
-
+# class TravelItineraryOrchestrator:
+#     """Complete orchestrator that generates optimized day-by-day itineraries"""
+    
 #     def __init__(self):
-#         """Initialize Modern LangChain Agent with Gemini"""
-
 #         api_key = os.getenv("GOOGLE_API_KEY")
-
+        
 #         if not api_key:
 #             print("❌ GOOGLE_API_KEY not found in .env")
-#             print("   Get free key from: https://makersuite.google.com/app/apikey")
-#             self.agent = None
-#             self.genai_model = None
+#             self.llm = None
 #             return
-
-#         print("🤖 Initializing Modern LangChain 0.3.x with Google Gemini...")
-#         print("   Version: LangChain 0.3.7 (Latest)")
-#         print("   LLM: Google Gemini Pro (100% FREE)")
-#         print("   Pattern: ReAct (Reasoning + Acting)")
-
-#         # Initialize Gemini directly
-#         genai.configure(api_key=api_key)
-#         self.genai_model = genai.GenerativeModel("gemini-2.5-flash")
-
-#         print("   ✅ Gemini LLM initialized!")
-
-#         # Setup tools
-#         tools = self._setup_tools()
-
-#         # Initialize agentic agent with modern LangChain
+        
+#         print("🤖 Initializing Travel Itinerary Orchestrator...")
+        
+#         # Initialize LLM for query understanding
+#         self.llm = ChatGoogleGenerativeAI(
+#             model="gemini-2.5-flash",
+#             temperature=0.2,
+#             google_api_key=api_key
+#         )
+        
+#         # Initialize all service agents
+#         self.flight_agent = FlightAgent(use_real_api=True)
+#         self.hotel_agent = AccommodationAgent()
+#         self.restaurant_agent = RestaurantAgent()
+#         self.activity_agent = ActivityAgent()
+#         self.trend_analyzer = TrendAnalyzer()
+        
+#         # Airport code mapping
+#         self.airport_codes = {
+#             'bangalore': 'BLR', 'mumbai': 'BOM', 'delhi': 'DEL',
+#             'tokyo': 'NRT', 'paris': 'CDG', 'london': 'LHR',
+#             'singapore': 'SIN', 'dubai': 'DXB', 'new york': 'JFK',
+#             'rome': 'FCO', 'barcelona': 'BCN', 'amsterdam': 'AMS',
+#             'blr': 'BLR', 'bom': 'BOM', 'del': 'DEL',
+#             'nrt': 'NRT', 'cdg': 'CDG', 'lhr': 'LHR'
+#         }
+        
+#         self.conversation_history = []
+#         print("✅ Orchestrator ready!")
+    
+#     def parse_date(self, date_str: str) -> str:
+#         """Convert various date formats to YYYY-MM-DD"""
+#         if not date_str:
+#             return None
+            
+#         # Already in correct format
+#         if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+#             return date_str
+        
+#         # Handle DD-MM-YYYY
+#         if '-' in date_str:
+#             parts = date_str.split('-')
+#             if len(parts[0]) == 2:  # DD-MM-YYYY
+#                 return f"{parts[2]}-{parts[1]}-{parts[0]}"
+        
+#         # Handle natural language dates
 #         try:
-#             self.agent = initialize_agent(
-#                 tools,
-#                 self._create_langchain_tool_wrapper(),
-#                 agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-#                 verbose=True,
-#                 max_iterations=10,
-#                 early_stopping_method="generate",
-#                 handle_parsing_errors=True
-#             )
-#             print("   ✅ Agent initialized with ReAct framework!")
-#         except Exception as e:
-#             print(f"   ⚠️  Agent initialization: {str(e)[:100]}")
-#             self.agent = None
+#             from dateutil import parser
+#             parsed = parser.parse(date_str)
+#             return parsed.strftime("%Y-%m-%d")
+#         except:
+#             return date_str
+    
+#     def get_airport_code(self, city: str) -> str:
+#         """Get airport code from city name"""
+#         if not city:
+#             return None
+#         city_lower = city.lower().strip()
+#         return self.airport_codes.get(city_lower, city.upper()[:3])
+    
+#     def extract_trip_details(self, query: str) -> dict:
+#         """Extract trip details from natural language query"""
+        
+#         context = ""
+#         if self.conversation_history:
+#             context = "Previous conversation:\n"
+#             for q, _ in self.conversation_history[-2:]:
+#                 context += f"User: {q}\n"
+        
+#         prompt = f"""{context}
 
-#         print("   Tools available: Flight Search, Hotel Search, Restaurant Search, Activities, Optimization")
+# Current query: {query}
 
-#     def _create_langchain_tool_wrapper(self):
-#         """Create a lightweight LLM wrapper for LangChain"""
+# Extract trip planning information. Respond ONLY with valid JSON:
 
-#         class GeminiLLMWrapper:
-#             """Minimal wrapper to work with LangChain agents"""
+# {{
+#     "origin_city": "city name or null",
+#     "destination_city": "city name or null",
+#     "departure_date": "YYYY-MM-DD or null",
+#     "return_date": "YYYY-MM-DD or null",
+#     "num_days": number or null,
+#     "budget_inr": number or null,
+#     "interests": ["interest1", "interest2"] or null,
+#     "dietary_restrictions": ["restriction1"] or null
+# }}
 
-#             def __init__(self, genai_model):
-#                 self.genai_model = genai_model
+# Examples:
+# "Plan a trip from Bangalore to Paris from March 1 to March 7"
+# → {{"origin_city": "Bangalore", "destination_city": "Paris", "departure_date": "2026-03-01", "return_date": "2026-03-07", "num_days": 7}}
 
-#             def __call__(self, prompt: str) -> str:
-#                 """Generate response using Gemini"""
-#                 try:
-#                     response = self.genai_model.generate_content(prompt)
-#                     return response.text if response.text else "No response generated"
-#                 except Exception as e:
-#                     return f"Error: {str(e)[:100]}"
-
-#             def invoke(self, message: Any) -> Dict:
-#                 """LangChain invoke method"""
-#                 if hasattr(message, 'content'):
-#                     text = message.content
-#                 else:
-#                     text = str(message)
-
-#                 response_text = self(text)
-#                 return {"content": response_text}
-
-#         return GeminiLLMWrapper(self.genai_model)
-
-#     def _setup_tools(self) -> List[Tool]:
-#         """Setup tools from your existing agents"""
-
-#         tools = [
-#             Tool(
-#                 name="Search Flights",
-#                 func=self._search_flights_wrapper,
-#                 description="""Search for flights from origin to destination.
-#                 Input format: 'origin,destination,date'
-#                 Example: 'BOM,NRT,2025-12-20'
-#                 Returns: Available flights with prices and details"""
-#             ),
-#             Tool(
-#                 name="Search Hotels",
-#                 func=self._search_hotels_wrapper,
-#                 description="""Search for hotels in a destination.
-#                 Input format: 'location,check_in_date,check_out_date'
-#                 Example: 'Tokyo,2025-12-20,2025-12-27'
-#                 Returns: Hotels with prices and ratings"""
-#             ),
-#             Tool(
-#                 name="Search Restaurants",
-#                 func=self._search_restaurants_wrapper,
-#                 description="""Search for restaurants in a location.
-#                 Input format: 'location,dietary_preference'
-#                 Example: 'Tokyo,vegetarian'
-#                 Returns: Restaurants with cuisines and ratings"""
-#             ),
-#             Tool(
-#                 name="Search Activities",
-#                 func=self._search_activities_wrapper,
-#                 description="""Search for activities and attractions.
-#                 Input format: 'location,interest_type'
-#                 Example: 'Tokyo,cultural'
-#                 Returns: Activities with descriptions"""
-#             ),
-#             Tool(
-#                 name="Optimize Itinerary",
-#                 func=self._optimize_itinerary_wrapper,
-#                 description="""Create an optimized day-by-day travel itinerary.
-#                 Input format: 'num_days,budget_inr,destination'
-#                 Example: '7,50000,Tokyo'
-#                 Returns: Optimized itinerary"""
-#             ),
-#         ]
-
-#         return tools
-
-#     def _search_flights_wrapper(self, input_str: str) -> str:
-#         """Wrapper for flight search"""
-#         try:
-#             from flight_agent import FlightAgent
-
-#             parts = [p.strip() for p in input_str.split(",")]
-#             origin = parts[0] if len(parts) > 0 else "BOM"
-#             destination = parts[1] if len(parts) > 1 else "NRT"
-#             date = parts[2] if len(parts) > 2 else "2025-12-20"
-
-#             agent = FlightAgent(use_real_api=True)
-#             flights = agent.search_flights(
-#                 origin=origin,
-#                 destination=destination,
-#                 departure_date=date,
-#                 max_results=5
-#             )
-
-#             if flights:
-#                 result = f"Found {len(flights)} flights:\n"
-#                 for i, f in enumerate(flights[:5], 1):
-#                     result += f"{i}. {f.carrier}: INR {f.price:.0f} ({f.duration_minutes} min)\n"
-#                 return result
-#             return "No flights found."
-
-#         except Exception as e:
-#             return f"Error: {str(e)[:100]}"
-
-#     def _search_hotels_wrapper(self, input_str: str) -> str:
-#         """Wrapper for hotel search"""
-#         try:
-#             from accommodation_agent import AccommodationAgent
-
-#             parts = [p.strip() for p in input_str.split(",")]
-#             location = parts[0] if len(parts) > 0 else "Tokyo"
-#             checkin = parts[1] if len(parts) > 1 else "2025-12-20"
-#             checkout = parts[2] if len(parts) > 2 else "2025-12-27"
-
-#             agent = AccommodationAgent()
-#             hotels = agent.search_accommodations(
-#                 destination=location,
-#                 check_in=checkin,
-#                 check_out=checkout,
-#                 max_results=5
-#             )
-
-#             if hotels:
-#                 result = f"Found {len(hotels)} hotels:\n"
-#                 for i, h in enumerate(hotels[:5], 1):
-#                     result += f"{i}. {h.name}: INR {h.price_per_night:.0f}/night (⭐ {h.rating}/5)\n"
-#                 return result
-#             return "No hotels found."
-
-#         except Exception as e:
-#             return f"Error: {str(e)[:100]}"
-
-#     def _search_restaurants_wrapper(self, input_str: str) -> str:
-#         """Wrapper for restaurant search"""
-#         try:
-#             from restaurant_agent import RestaurantAgent
-
-#             parts = [p.strip() for p in input_str.split(",")]
-#             location = parts[0] if len(parts) > 0 else "Tokyo"
-#             dietary = parts[1] if len(parts) > 1 else None
-
-#             agent = RestaurantAgent()
-#             dietary_list = [dietary] if dietary else None
-
-#             restaurants = agent.search_restaurants(
-#                 location=location,
-#                 dietary_restrictions=dietary_list,
-#                 max_results=5
-#             )
-
-#             if restaurants:
-#                 result = f"Found {len(restaurants)} restaurants:\n"
-#                 for i, r in enumerate(restaurants[:5], 1):
-#                     cuisines = ", ".join(r.cuisine_type) if r.cuisine_type else "Mixed"
-#                     result += f"{i}. {r.name} ({cuisines}): ⭐ {r.rating:.1f}/5\n"
-#                 return result
-#             return "No restaurants found."
-
-#         except Exception as e:
-#             return f"Error: {str(e)[:100]}"
-
-#     def _search_activities_wrapper(self, input_str: str) -> str:
-#         """Wrapper for activities search"""
-#         try:
-#             from activity_agent import ActivityAgent
-
-#             parts = [p.strip() for p in input_str.split(",")]
-#             location = parts[0] if len(parts) > 0 else "Tokyo"
-#             interests = [parts[1]] if len(parts) > 1 else ["cultural", "adventure"]
-
-#             agent = ActivityAgent(use_mock=True)
-#             activities = agent.search_activities(
-#                 location=location,
-#                 interests=interests,
-#                 max_results=5
-#             )
-
-#             if activities:
-#                 result = f"Found {len(activities)} activities:\n"
-#                 for i, a in enumerate(activities[:5], 1):
-#                     result += f"{i}. {a['name']} ({a.get('category', 'Activity')})\n"
-#                 return result
-#             return "No activities found."
-
-#         except Exception as e:
-#             return f"Error: {str(e)[:100]}"
-
-#     def _optimize_itinerary_wrapper(self, input_str: str) -> str:
-#         """Wrapper for itinerary optimization"""
-#         try:
-#             parts = [p.strip() for p in input_str.split(",")]
-#             days = int(parts[0]) if len(parts) > 0 else 7
-#             budget = float(parts[1]) if len(parts) > 1 else 50000
-#             destination = parts[2] if len(parts) > 2 else "Tokyo"
-
-#             return f"""✅ Optimized {days}-day itinerary for {destination}
-# Budget: INR {budget:,.0f}
-# Daily: INR {budget/days:,.0f}
-
-# Your personalized itinerary includes:
-# • Best-value flights & hotels
-# • Recommended restaurants
-# • Must-see activities
-# • Budget-optimized schedule"""
-
-#         except Exception as e:
-#             return f"Error: {str(e)[:100]}"
-
-#     def query_gemini_directly(self, prompt: str) -> str:
-#         """Query Gemini directly (bypass LangChain agent)"""
-
-#         if not self.genai_model:
-#             return "❌ Gemini not initialized"
+# "I want to visit Tokyo for 5 days starting Feb 9 from Mumbai"
+# → {{"origin_city": "Mumbai", "destination_city": "Tokyo", "departure_date": "2026-02-09", "num_days": 5}}
+# """
 
 #         try:
-#             response = self.genai_model.generate_content(prompt)
-#             return response.text if response.text else "No response"
+#             response = self.llm.invoke([HumanMessage(content=prompt)])
+#             text = response.content.strip()
+            
+#             # Extract JSON
+#             if '```json' in text:
+#                 text = text.split('```json')[1].split('```')[0].strip()
+#             elif '```' in text:
+#                 text = text.split('```')[1].split('```')[0].strip()
+            
+#             import json
+#             data = json.loads(text)
+            
+#             # Calculate missing fields
+#             if data.get('departure_date') and data.get('return_date') and not data.get('num_days'):
+#                 dep = datetime.strptime(data['departure_date'], '%Y-%m-%d')
+#                 ret = datetime.strptime(data['return_date'], '%Y-%m-%d')
+#                 data['num_days'] = (ret - dep).days
+            
+#             if data.get('departure_date') and data.get('num_days') and not data.get('return_date'):
+#                 dep = datetime.strptime(data['departure_date'], '%Y-%m-%d')
+#                 ret = dep + timedelta(days=data['num_days'])
+#                 data['return_date'] = ret.strftime('%Y-%m-%d')
+            
+#             return data
 #         except Exception as e:
-#             return f"Error: {str(e)[:100]}"
-
-#     def process_query(self, user_input: str) -> str:
-#         """Process query through agentic agent or direct Gemini"""
-
-#         if not self.genai_model:
-#             return "❌ Gemini not initialized. Check GOOGLE_API_KEY."
-
-#         print(f"\n🧠 Processing: {user_input}")
-#         print("   (Gemini thinking...)")
-
-#         # Use direct Gemini for reliability
-#         return self.query_gemini_directly(user_input)
-
-#     def interactive_mode(self):
-#         """Run interactive agentic mode"""
-
-#         if not self.genai_model:
+#             print(f"   ⚠️ Extraction error: {e}")
+#             return {}
+    
+#     def generate_itinerary(self, trip_details: dict = None, user_profile: UserProfile = None):
+#         """Generate complete optimized day-by-day itinerary"""
+        
+#         print("\n" + "="*80)
+#         print("🌍 GENERATING COMPLETE TRAVEL ITINERARY")
+#         print("="*80)
+        
+#         # Use provided details or defaults
+#         if not trip_details:
+#             trip_details = {}
+        
+#         origin = trip_details.get('origin_city') or 'Mumbai'
+#         destination = trip_details.get('destination_city') or 'Tokyo'
+#         departure_date = trip_details.get('departure_date') or '2026-03-20'
+#         num_days = trip_details.get('num_days') or 7
+#         budget = trip_details.get('budget_inr') or 150000
+#         interests = trip_details.get('interests')
+#         dietary = trip_details.get('dietary_restrictions')
+        
+#         # Ensure interests and dietary are lists (handle None, null, or non-list values)
+#         if not interests or not isinstance(interests, list):
+#             interests = ['cultural', 'adventure']
+#         if not dietary or not isinstance(dietary, list):
+#             dietary = []
+        
+#         # Create or use user profile
+#         if not user_profile:
+#             user_profile = create_sample_profile()
+#             # Update profile with trip details
+#             if budget:
+#                 user_profile.travel_preferences.budget_total = budget
+#                 user_profile.travel_preferences.budget_per_day = budget / num_days
+#             if destination:
+#                 user_profile.destinations = [destination]
+#             if departure_date:
+#                 return_date_calc = (datetime.strptime(departure_date, '%Y-%m-%d') + timedelta(days=num_days)).strftime('%Y-%m-%d')
+#                 user_profile.dates = TripDates(start=departure_date, end=return_date_calc)
+#             if interests:
+#                 user_profile.travel_preferences.activity_interests = interests
+#             if dietary:
+#                 user_profile.travel_preferences.dietary_restrictions = dietary
+        
+#         origin_code = self.get_airport_code(origin)
+#         dest_code = self.get_airport_code(destination)
+        
+#         print(f"\n📍 Route: {origin} ({origin_code}) → {destination} ({dest_code})")
+#         print(f"📅 Dates: {departure_date} ({num_days} days)")
+#         print(f"💰 Budget: INR {budget:,}")
+#         print(f"🎯 Interests: {', '.join(interests)}")
+#         if dietary:
+#             print(f"🥗 Dietary: {', '.join(dietary)}")
+        
+#         # Calculate return date
+#         dep_date = datetime.strptime(departure_date, '%Y-%m-%d')
+#         return_date = (dep_date + timedelta(days=num_days)).strftime('%Y-%m-%d')
+        
+#         # [1/6] Analyze trends
+#         print(f"\n{'='*80}")
+#         print("[1/6] 🔍 ANALYZING SEASONAL TRENDS")
+#         print("="*80)
+        
+#         try:
+#             trends = self.trend_analyzer.get_seasonal_suggestions(destination, departure_date)
+#             if trends:
+#                 print(f"✅ Found {len(trends)} seasonal attractions")
+#                 for trend in trends[:3]:
+#                     print(f"   • {trend['name']} ({trend['season']})")
+#             else:
+#                 print("   No specific seasonal trends found")
+#         except Exception as e:
+#             print(f"   ⚠️ Trend analysis unavailable: {str(e)[:50]}")
+#             trends = []
+        
+#         # [2/6] Search flights
+#         print(f"\n{'='*80}")
+#         print("[2/6] ✈️  SEARCHING FLIGHTS")
+#         print("="*80)
+#         print(f"   Outbound: {origin_code} → {dest_code} on {departure_date}")
+        
+#         flights = self.flight_agent.search_flights(
+#             origin=origin_code,
+#             destination=dest_code,
+#             departure_date=departure_date,
+#             max_results=10
+#         )
+        
+#         if flights:
+#             print(f"✅ Found {len(flights)} flights")
+#             for i, f in enumerate(flights[:3], 1):
+#                 hrs = f.duration_minutes // 60
+#                 mins = f.duration_minutes % 60
+#                 print(f"   {i}. {f.carrier} {f.flight_id}: INR {f.price:,.0f} ({hrs}h {mins}m)")
+#         else:
+#             print("   ⚠️ No flights found (will use mock data)")
+#             flights = []
+        
+#         # [3/6] Search accommodations
+#         print(f"\n{'='*80}")
+#         print("[3/6] 🏨 SEARCHING ACCOMMODATIONS")
+#         print("="*80)
+#         print(f"   Location: {destination}")
+#         print(f"   Check-in: {departure_date}, Check-out: {return_date}")
+        
+#         hotels = self.hotel_agent.search_accommodations(
+#             destination=destination,
+#             check_in=departure_date,
+#             check_out=return_date,
+#             max_results=10
+#         )
+        
+#         if hotels:
+#             print(f"✅ Found {len(hotels)} accommodations")
+#             for i, h in enumerate(hotels[:3], 1):
+#                 print(f"   {i}. {h.name}: INR {h.price_per_night:,.0f}/night ({h.accommodation_type})")
+#         else:
+#             print("   ⚠️ No accommodations found (will use mock data)")
+#             hotels = []
+        
+#         # [4/6] Search restaurants
+#         print(f"\n{'='*80}")
+#         print("[4/6] 🍽️  SEARCHING RESTAURANTS")
+#         print("="*80)
+#         print(f"   Location: {destination}")
+#         if dietary:
+#             print(f"   Dietary: {', '.join(dietary)}")
+        
+#         restaurants = self.restaurant_agent.search_restaurants(
+#             location=destination,
+#             dietary_restrictions=dietary if dietary else None,
+#             max_results=20
+#         )
+        
+#         if restaurants:
+#             print(f"✅ Found {len(restaurants)} restaurants")
+#             restaurants = self.restaurant_agent.rank_restaurants(restaurants)
+#             for i, r in enumerate(restaurants[:3], 1):
+#                 print(f"   {i}. {r.name}: {r.cuisine_type}")
+#         else:
+#             print("   ⚠️ No restaurants found (will use mock data)")
+#             restaurants = []
+        
+#         # [5/6] Search activities
+#         print(f"\n{'='*80}")
+#         print("[5/6] 🎭 SEARCHING ACTIVITIES")
+#         print("="*80)
+#         print(f"   Location: {destination}")
+#         print(f"   Interests: {', '.join(interests)}")
+        
+#         activities = self.activity_agent.search_activities(
+#             location=destination,
+#             interests=interests if interests else None,
+#             max_results=25
+#         )
+        
+#         if activities:
+#             print(f"✅ Found {len(activities)} activities")
+#             for i, a in enumerate(activities[:3], 1):
+#                 print(f"   {i}. {a.name}: {a.description[:50]}...")
+#         else:
+#             print("   ⚠️ No activities found (will use mock data)")
+#             activities = []
+        
+#         # [6/6] Optimize itinerary
+#         print(f"\n{'='*80}")
+#         print("[6/6] 🧮 OPTIMIZING ITINERARY (OR-Tools CP-SAT)")
+#         print("="*80)
+        
+#         optimizer = ItineraryOptimizer(user_profile)
+        
+#         optimized = optimizer.optimize_itinerary(
+#             flights=flights,
+#             accommodations=hotels,
+#             restaurants=restaurants,
+#             activities=activities,
+#             num_days=num_days
+#         )
+        
+#         if 'error' in optimized:
+#             print(f"   ❌ Optimization error: {optimized['error']}")
 #             return
-
-#         print("\n" + "="*70)
-#         print("🌍 MODERN LANGCHAIN 0.3.x + GOOGLE GEMINI")
-#         print("    AI-POWERED TRAVEL ITINERARY GENERATOR")
-#         print("="*70)
-#         print("\n🤖 Chat with your AI travel planner!")
-#         print("   Type 'quit' to exit")
-#         print("   Type 'help' for examples")
-#         print("\nPowered by:")
-#         print("  • LangChain 0.3.7 (Modern)")
-#         print("  • Google Gemini Pro (100% FREE)")
-#         print("  • ReAct Framework")
-#         print("="*70)
-
-#         examples = [
-#             "Plan a 7-day trip to Tokyo with 50000 INR budget",
-#             "What are good 5-star hotels in Dubai?",
-#             "Find vegetarian restaurants in Rome",
-#             "Best cultural activities in Singapore",
-#             "Create an optimized trip to Goa for 3 days with 25000 INR",
-#         ]
-
-#         while True:
-#             print()
-#             user_input = input("You: ").strip()
-
-#             if user_input.lower() == "quit":
-#                 print("\n👋 Thank you! Safe travels!")
-#                 break
-
-#             if user_input.lower() == "help":
-#                 print("\n📚 Example queries:")
-#                 for i, ex in enumerate(examples, 1):
-#                     print(f"   {i}. {ex}")
+        
+#         print(f"✅ Optimization complete!")
+#         print(f"   Total cost: {optimized.get('currency', 'INR')} {optimized.get('total_cost', 0):,.2f}")
+#         print(f"   Budget remaining: INR {budget - optimized.get('total_cost', 0):,.2f}")
+        
+#         # Display day-by-day itinerary
+#         self.display_itinerary(optimized, trip_details)
+        
+#         return optimized
+    
+#     def display_itinerary(self, itinerary: dict, trip_details: dict):
+#         """Display formatted day-by-day itinerary"""
+        
+#         print("\n" + "="*80)
+#         print("📋 YOUR PERSONALIZED DAY-BY-DAY ITINERARY")
+#         print("="*80)
+        
+#         destination = trip_details.get('destination_city', 'Destination')
+        
+#         print(f"\n🌍 Destination: {destination}")
+#         print(f"💰 Total Cost: {itinerary.get('currency', 'INR')} {itinerary.get('total_cost', 0):,.2f}")
+#         print(f"📅 Duration: {itinerary.get('num_days', 0)} days")
+        
+#         # Day-by-day breakdown
+#         for day_num in range(itinerary.get('num_days', 0)):
+#             if day_num not in itinerary.get('itinerary', {}):
 #                 continue
-
+            
+#             items = itinerary['itinerary'][day_num]
+            
+#             print(f"\n{'─'*80}")
+#             print(f"📅 DAY {day_num + 1}")
+#             print(f"{'─'*80}")
+            
+#             if not items:
+#                 print("   🌴 Rest day / Free time")
+#                 continue
+            
+#             day_cost = 0
+            
+#             for item in items:
+#                 # Get item details
+#                 name = getattr(item, 'name', 'Unknown')
+#                 item_type = getattr(item, 'item_type', 'Unknown')
+                
+#                 # Time
+#                 time_str = "All day"
+#                 if hasattr(item, 'time_str'):
+#                     time_str = item.time_str
+#                 elif hasattr(item, 'departure_time'):
+#                     time_str = item.departure_time
+#                 elif hasattr(item, 'start_time'):
+#                     time_str = item.start_time
+                
+#                 # Duration
+#                 duration_str = ""
+#                 if hasattr(item, 'duration_minutes') and item.duration_minutes:
+#                     hrs = item.duration_minutes // 60
+#                     mins = item.duration_minutes % 60
+#                     duration_str = f" ({hrs}h {mins}m)"
+#                 elif hasattr(item, 'duration_hours') and item.duration_hours:
+#                     duration_str = f" ({item.duration_hours}h)"
+                
+#                 # Cost
+#                 cost = 0
+#                 if hasattr(item, 'cost'):
+#                     cost = item.cost
+#                 elif hasattr(item, 'price'):
+#                     cost = item.price
+#                 elif hasattr(item, 'price_per_night'):
+#                     cost = item.price_per_night
+                
+#                 day_cost += cost
+                
+#                 # Icon based on type
+#                 icon = "📍"
+#                 if 'flight' in item_type.lower():
+#                     icon = "✈️"
+#                 elif 'hotel' in item_type.lower() or 'accommodation' in item_type.lower():
+#                     icon = "🏨"
+#                 elif 'restaurant' in item_type.lower():
+#                     icon = "🍽️"
+#                 elif 'activity' in item_type.lower():
+#                     icon = "🎭"
+                
+#                 print(f"\n   {icon} [{time_str}] {name}{duration_str}")
+#                 print(f"      Type: {item_type}")
+#                 if cost > 0:
+#                     print(f"      Cost: INR {cost:,.2f}")
+                
+#                 # Additional info
+#                 if hasattr(item, 'carrier'):
+#                     print(f"      Carrier: {item.carrier}")
+#                 if hasattr(item, 'cuisine_type'):
+#                     print(f"      Cuisine: {item.cuisine_type}")
+#                 if hasattr(item, 'rating') and item.rating:
+#                     print(f"      Rating: {'⭐' * int(item.rating)}")
+            
+#             if day_cost > 0:
+#                 print(f"\n   💵 Day {day_num + 1} Total: INR {day_cost:,.2f}")
+        
+#         print("\n" + "="*80)
+#         print("✅ ITINERARY GENERATION COMPLETE!")
+#         print("="*80)
+    
+#     def ask(self, query: str) -> str:
+#         """Handle natural language queries"""
+        
+#         print("\n🧠 Understanding your request...")
+        
+#         # Check if it's a trip planning request
+#         if any(word in query.lower() for word in ['plan', 'trip', 'itinerary', 'travel', 'visit']):
+#             trip_details = self.extract_trip_details(query)
+            
+#             if trip_details.get('destination_city'):
+#                 self.generate_itinerary(trip_details)
+#                 return "Itinerary generated above ↑"
+#             else:
+#                 return "❓ I need at least a destination city. Example: 'Plan a trip to Paris from Bangalore'"
+        
+#         return "❓ I specialize in planning complete trip itineraries. Try: 'Plan a trip from Bangalore to Paris for 5 days'"
+    
+#     def interactive(self):
+#         """Interactive mode"""
+        
+#         if not self.llm:
+#             print("❌ Agent not initialized. Check GOOGLE_API_KEY in .env")
+#             return
+        
+#         print("\n" + "="*80)
+#         print("🌍 TRAVEL ITINERARY ORCHESTRATOR")
+#         print("="*80)
+#         print("\n💡 I create complete day-by-day travel itineraries!")
+#         print("\n📝 Commands:")
+#         print("   • 'generate' - Create sample 7-day Tokyo itinerary")
+#         print("   • 'quit' - Exit")
+#         print("\n📋 Examples:")
+#         print("   • Plan a trip from Bangalore to Paris from March 1 to March 7")
+#         print("   • I want to visit Tokyo for 5 days starting Feb 9 from Mumbai")
+#         print("   • Create a 4-day Singapore trip from Delhi with budget 80000 INR")
+#         print("="*80)
+        
+#         while True:
+#             user_input = input("\nYou: ").strip()
+            
 #             if not user_input:
 #                 continue
-
-#             response = self.process_query(user_input)
-#             print(f"\n✅ Gemini: {response}")
+            
+#             if user_input.lower() == "quit":
+#                 print("\n👋 Safe travels!")
+#                 break
+            
+#             if user_input.lower() == "generate":
+#                 self.generate_itinerary()
+#                 continue
+            
+#             self.conversation_history.append((user_input, ""))
+#             response = self.ask(user_input)
+#             print(f"\n{response}")
 
 
 # if __name__ == "__main__":
-#     print("\n" + "="*70)
-#     print("🚀 INITIALIZING MODERN LANGCHAIN 0.3.x WITH GOOGLE GEMINI")
-#     print("="*70)
-
-#     agent = ModernLangChainGeminiAgent()
-
-#     if agent.genai_model:
-#         agent.interactive_mode()
+#     orchestrator = TravelItineraryOrchestrator()
+#     if orchestrator.llm:
+#         orchestrator.interactive()
 #     else:
-#         print("\n❌ Failed to initialize")
-#         print("\n📝 Setup:")
-#         print("   1. Get API key: https://makersuite.google.com/app/apikey")
-#         print("   2. Add to .env: GOOGLE_API_KEY=your_key")
-#         print("   3. Run: python llm_orchestrator.py")
+#         print("\n❌ Setup required:")
+#         print("   1. Create .env file")
+#         print("   2. Add: GOOGLE_API_KEY=your_key")
+#         print("   3. Get key from: https://makersuite.google.com/app/apikey")
+
 """
-LangChain 0.3.x Agentic AI - Travel Itinerary Generator
-Modern Direct Google Gemini Integration
-WITH REAL AGENT OUTPUT (Flight, Accommodation, Restaurant, Activity, Optimization)
-FIXED: Proper attribute handling for ItineraryItem
+Complete Travel Itinerary Orchestrator
+Generates day-by-day travel plans with flights, hotels, restaurants, and activities
+Uses direct tool calls (no parsing errors) + OR-Tools optimizer
 """
 
 import os
-from typing import List, Dict, Any
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-import google.generativeai as genai
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.schema import HumanMessage
+
+# Import existing agents and utilities
+from flight_agent import FlightAgent
+from accommodation_agent import AccommodationAgent
+from restaurant_agent import RestaurantAgent
+from activity_agent import ActivityAgent
+from optimizer import ItineraryOptimizer
+from trend_analyzer import TrendAnalyzer
+from user_profile import create_sample_profile, UserProfile, TripDates
 
 load_dotenv()
 
 
-class CompleteLangChainAgenticAI:
-    """
-    Complete LangChain 0.3.x Agentic AI using Google Gemini
-    Integrates ALL agents: Flight, Accommodation, Restaurant, Activity, Optimizer
-    Shows detailed output from each agent
-    """
-
+class TravelItineraryOrchestrator:
+    """Complete orchestrator that generates optimized day-by-day itineraries"""
+    
     def __init__(self):
-        """Initialize with all agents"""
-
         api_key = os.getenv("GOOGLE_API_KEY")
-
+        
         if not api_key:
             print("❌ GOOGLE_API_KEY not found in .env")
-            print("   Get free key from: https://makersuite.google.com/app/apikey")
-            self.genai_model = None
+            self.llm = None
             return
+        
+        print("🤖 Initializing Travel Itinerary Orchestrator...")
+        
+        # Initialize LLM for query understanding
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            temperature=0.2,
+            google_api_key=api_key
+        )
+        
+        # Initialize all service agents
+        self.flight_agent = FlightAgent(use_real_api=True)
+        self.hotel_agent = AccommodationAgent()
+        self.restaurant_agent = RestaurantAgent()
+        self.activity_agent = ActivityAgent()
+        self.trend_analyzer = TrendAnalyzer()
+        
+        # Airport code mapping
+        self.airport_codes = {
+            'bangalore': 'BLR', 'mumbai': 'BOM', 'delhi': 'DEL',
+            'tokyo': 'NRT', 'paris': 'CDG', 'london': 'LHR',
+            'singapore': 'SIN', 'dubai': 'DXB', 'new york': 'JFK',
+            'rome': 'FCO', 'barcelona': 'BCN', 'amsterdam': 'AMS',
+            'blr': 'BLR', 'bom': 'BOM', 'del': 'DEL',
+            'nrt': 'NRT', 'cdg': 'CDG', 'lhr': 'LHR'
+        }
+        
+        self.conversation_history = []
+        print("✅ Orchestrator ready!")
+    
+    def parse_date(self, date_str: str) -> str:
+        """Convert various date formats to YYYY-MM-DD"""
+        if not date_str:
+            return None
+            
+        # Already in correct format
+        if len(date_str) == 10 and date_str[4] == '-' and date_str[7] == '-':
+            return date_str
+        
+        # Handle DD-MM-YYYY
+        if '-' in date_str:
+            parts = date_str.split('-')
+            if len(parts[0]) == 2:  # DD-MM-YYYY
+                return f"{parts[2]}-{parts[1]}-{parts[0]}"
+        
+        # Handle natural language dates
+        try:
+            from dateutil import parser
+            parsed = parser.parse(date_str)
+            return parsed.strftime("%Y-%m-%d")
+        except:
+            return date_str
+    
+    def get_airport_code(self, city: str) -> str:
+        """Get airport code from city name"""
+        if not city:
+            return None
+        city_lower = city.lower().strip()
+        return self.airport_codes.get(city_lower, city.upper()[:3])
+    
+    def extract_trip_details(self, query: str) -> dict:
+        """Extract trip details from natural language query"""
+        
+        context = ""
+        if self.conversation_history:
+            context = "Previous conversation:\n"
+            for q, _ in self.conversation_history[-2:]:
+                context += f"User: {q}\n"
+        
+        prompt = f"""{context}
 
-        print("🤖 Initializing Complete LangChain 0.3.x with ALL AGENTS...")
-        print("   Version: LangChain 0.3.7 (Latest)")
-        print("   LLM: Google Gemini Pro (100% FREE)")
+Current query: {query}
 
-        # Initialize Gemini
-        genai.configure(api_key=api_key)
-        self.genai_model = genai.GenerativeModel("gemini-2.5-flash")
+Extract trip planning information. Respond ONLY with valid JSON:
 
+{{
+    "origin_city": "city name or null",
+    "destination_city": "city name or null",
+    "departure_date": "YYYY-MM-DD or null",
+    "return_date": "YYYY-MM-DD or null",
+    "num_days": number or null,
+    "budget_inr": number or null,
+    "interests": ["interest1", "interest2"] or null,
+    "dietary_restrictions": ["restriction1"] or null
+}}
 
-        print("   ✅ Gemini LLM initialized!")
+Examples:
+"Plan a trip from Bangalore to Paris from March 1 to March 7"
+→ {{"origin_city": "Bangalore", "destination_city": "Paris", "departure_date": "2026-03-01", "return_date": "2026-03-07", "num_days": 7}}
 
-        # Initialize all agents
-        self._init_agents()
-
-        print("\n   ✅ All agents initialized!")
-
-    def _init_agents(self):
-        """Initialize all travel agents"""
+"I want to visit Tokyo for 5 days starting Feb 9 from Mumbai"
+→ {{"origin_city": "Mumbai", "destination_city": "Tokyo", "departure_date": "2026-02-09", "num_days": 5}}
+"""
 
         try:
-            from flight_agent import FlightAgent
-            from accommodation_agent import AccommodationAgent
-            from restaurant_agent import RestaurantAgent
-            from activity_agent import ActivityAgent
-            from optimizer import ItineraryOptimizer
-            from trend_analyzer import TrendAnalyzer
-            from user_profile import create_sample_profile
-
-            self.flight_agent = FlightAgent(use_real_api=True)
-            self.accommodation_agent = AccommodationAgent()
-            self.restaurant_agent = RestaurantAgent()
-            self.activity_agent = ActivityAgent(use_mock=True)
-            self.trend_analyzer = TrendAnalyzer()
-            self.user_profile = create_sample_profile()
-
-            print("   ✅ Flight Agent (Amadeus API)")
-            print("   ✅ Accommodation Agent (OpenStreetMap)")
-            print("   ✅ Restaurant Agent (OpenStreetMap)")
-            print("   ✅ Activity Agent (Database)")
-            print("   ✅ Trend Analyzer")
-            print("   ✅ User Profile Loaded")
-
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            text = response.content.strip()
+            
+            # Extract JSON
+            if '```json' in text:
+                text = text.split('```json')[1].split('```')[0].strip()
+            elif '```' in text:
+                text = text.split('```')[1].split('```')[0].strip()
+            
+            import json
+            data = json.loads(text)
+            
+            # Calculate missing fields
+            if data.get('departure_date') and data.get('return_date') and not data.get('num_days'):
+                dep = datetime.strptime(data['departure_date'], '%Y-%m-%d')
+                ret = datetime.strptime(data['return_date'], '%Y-%m-%d')
+                data['num_days'] = (ret - dep).days
+            
+            if data.get('departure_date') and data.get('num_days') and not data.get('return_date'):
+                dep = datetime.strptime(data['departure_date'], '%Y-%m-%d')
+                ret = dep + timedelta(days=data['num_days'])
+                data['return_date'] = ret.strftime('%Y-%m-%d')
+            
+            return data
         except Exception as e:
-            print(f"   ❌ Agent initialization error: {str(e)[:100]}")
-            self.genai_model = None
-
-    def generate_full_itinerary(self) -> Dict[str, Any]:
-        """Generate complete itinerary using ALL agents"""
-
-        print("\n" + "="*70)
-        print("🌍 GENERATING COMPLETE ITINERARY (REAL APIs + AI ORCHESTRATION)")
-        print("="*70)
-
+            print(f"   ⚠️ Extraction error: {e}")
+            return {}
+    
+    def generate_itinerary(self, trip_details: dict = None, user_profile: UserProfile = None):
+        """Generate complete optimized day-by-day itinerary"""
+        
+        print("\n" + "="*80)
+        print("🌍 GENERATING COMPLETE TRAVEL ITINERARY")
+        print("="*80)
+        
+        # Use provided details or defaults
+        if not trip_details:
+            trip_details = {}
+        
+        origin = trip_details.get('origin_city') or 'Mumbai'
+        destination = trip_details.get('destination_city') or 'Tokyo'
+        departure_date = trip_details.get('departure_date') or '2026-03-20'
+        num_days = trip_details.get('num_days') or 7
+        budget = trip_details.get('budget_inr') or 150000
+        interests = trip_details.get('interests')
+        dietary = trip_details.get('dietary_restrictions')
+        
+        # Ensure interests and dietary are lists (handle None, null, or non-list values)
+        if not interests or not isinstance(interests, list):
+            interests = ['cultural', 'adventure']
+        if not dietary or not isinstance(dietary, list):
+            dietary = []
+        
+        # Create or use user profile
+        if not user_profile:
+            user_profile = create_sample_profile()
+            # Update profile with trip details
+            if budget:
+                user_profile.travel_preferences.budget_total = budget
+                user_profile.travel_preferences.budget_per_day = budget / num_days
+            if destination:
+                user_profile.destinations = [destination]
+            if departure_date:
+                return_date_calc = (datetime.strptime(departure_date, '%Y-%m-%d') + timedelta(days=num_days)).strftime('%Y-%m-%d')
+                user_profile.dates = TripDates(start=departure_date, end=return_date_calc)
+            if interests:
+                user_profile.travel_preferences.activity_interests = interests
+            if dietary:
+                user_profile.travel_preferences.dietary_restrictions = dietary
+        
+        origin_code = self.get_airport_code(origin)
+        dest_code = self.get_airport_code(destination)
+        
+        print(f"\n📍 Route: {origin} ({origin_code}) → {destination} ({dest_code})")
+        print(f"📅 Dates: {departure_date} ({num_days} days)")
+        print(f"💰 Budget: INR {budget:,}")
+        print(f"🎯 Interests: {', '.join(interests)}")
+        if dietary:
+            print(f"🥗 Dietary: {', '.join(dietary)}")
+        
+        # Calculate return date
+        dep_date = datetime.strptime(departure_date, '%Y-%m-%d')
+        return_date = (dep_date + timedelta(days=num_days)).strftime('%Y-%m-%d')
+        
+        # [1/6] Analyze trends
+        print(f"\n{'='*80}")
+        print("[1/6] 🔍 ANALYZING SEASONAL TRENDS")
+        print("="*80)
+        
         try:
-            user_profile = self.user_profile
-
-            print("\nTrip Details:")
-            print(f"  👤 User: {user_profile.name}")
-            destination = user_profile.destinations[0] if user_profile.destinations else "Tokyo, Japan"
-            print(f"  📍 Destination: {destination}")
-
-            start_date = user_profile.dates.start
-            end_date = user_profile.dates.end
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-            num_days = (end_dt - start_dt).days + 1
-
-            print(f"  📅 Duration: {num_days} days ({start_date} to {end_date})")
-            print(f"  💰 Budget: {user_profile.default_currency} {user_profile.travel_preferences.budget_total:,.2f}")
-
-            # [1/6] Trends
-            print("\n[1/6] Analyzing trends and seasonal attractions...")
-            seasonal_suggestions = self.trend_analyzer.get_seasonal_suggestions(destination, start_date)
-            print(f"  ✅ Found {len(seasonal_suggestions)} seasonal attractions")
-
-            # [2/6] Flights
-            print("\n[2/6] Searching flights with REAL Amadeus TEST API...")
-            origin_code = "BOM"
-            dest_code = self._get_airport_code(destination)
-
-            flights = self.flight_agent.search_flights(
-                origin=origin_code,
-                destination=dest_code,
-                departure_date=start_date,
-                travel_class=user_profile.travel_preferences.comfort_level.upper(),
-                max_results=5
-            )
-
-            if flights:
-                print(f"  ✅ Found {len(flights)} real flights")
-                flights = self.flight_agent.filter_by_preferences(flights)
-                flights = self.flight_agent.rank_flights(flights)
+            trends = self.trend_analyzer.get_seasonal_suggestions(destination, departure_date)
+            if trends:
+                print(f"✅ Found {len(trends)} seasonal attractions")
+                for trend in trends[:3]:
+                    print(f"   • {trend['name']} ({trend['season']})")
             else:
-                print("  ⚠️  No flights found")
-                flights = []
-
-            # [3/6] Accommodations
-            print("\n[3/6] Searching accommodations with REAL OpenStreetMap API...")
-            accommodations = self.accommodation_agent.search_accommodations(
-                destination=destination,
-                check_in=start_date,
-                check_out=end_date,
-                accommodation_types=user_profile.travel_preferences.accommodation_pref,
-                max_results=10
-            )
-
-            if accommodations:
-                print(f"  ✅ Found {len(accommodations)} real accommodations from OpenStreetMap")
-                accommodations = self.accommodation_agent.rank_accommodations(accommodations)
-            else:
-                print("  ⚠️  No accommodations found")
-                accommodations = []
-
-            # [4/6] Restaurants
-            print("\n[4/6] Searching restaurants with REAL OpenStreetMap API...")
-            restaurants = self.restaurant_agent.search_restaurants(
-                location=destination,
-                dietary_restrictions=user_profile.travel_preferences.dietary_restrictions,
-                max_results=15
-            )
-
-            if restaurants:
-                print(f"  ✅ Found {len(restaurants)} real restaurants from OpenStreetMap")
-                restaurants = self.restaurant_agent.rank_restaurants(restaurants)
-            else:
-                print("  ⚠️  No restaurants found")
-                restaurants = []
-
-            # [5/6] Activities
-            print("\n[5/6] Searching activities...")
-            activities = self.activity_agent.search_activities(
-                location=destination,
-                interests=user_profile.travel_preferences.activity_interests,
-                max_results=20
-            )
-
-            if activities:
-                print(f"  ✅ Found {len(activities)} activities")
-            else:
-                print("  ⚠️  No activities found")
-                activities = []
-
-            # [6/6] Optimize
-            print("\n[6/6] Optimizing itinerary with OR-Tools CP-SAT solver...")
-            from optimizer import ItineraryOptimizer
-            optimizer = ItineraryOptimizer(user_profile)
-
-            optimized_itinerary = optimizer.optimize_itinerary(
-                flights=flights,
-                accommodations=accommodations,
-                restaurants=restaurants,
-                activities=activities,
-                num_days=num_days
-            )
-
-            if 'error' not in optimized_itinerary:
-                print(f"  ✅ Optimization complete!")
-                print(f"  💰 Total Cost: {optimized_itinerary['currency']} {optimized_itinerary['total_cost']:,.2f}")
-
-            return optimized_itinerary
-
+                print("   No specific seasonal trends found")
         except Exception as e:
-            print(f"\n❌ Error generating itinerary: {str(e)[:200]}")
-            return {'error': str(e)}
-
-    def display_itinerary(self, itinerary: Dict[str, Any]):
-        """Display complete itinerary with proper error handling"""
-
-        if 'error' in itinerary:
-            print(f"\n❌ Error: {itinerary['error']}")
+            print(f"   ⚠️ Trend analysis unavailable: {str(e)[:50]}")
+            trends = []
+        
+        # [2/6] Search flights
+        print(f"\n{'='*80}")
+        print("[2/6] ✈️  SEARCHING FLIGHTS")
+        print("="*80)
+        print(f"   Outbound: {origin_code} → {dest_code} on {departure_date}")
+        
+        flights = self.flight_agent.search_flights(
+            origin=origin_code,
+            destination=dest_code,
+            departure_date=departure_date,
+            max_results=10
+        )
+        
+        if flights:
+            print(f"✅ Found {len(flights)} flights")
+            for i, f in enumerate(flights[:3], 1):
+                hrs = f.duration_minutes // 60
+                mins = f.duration_minutes % 60
+                print(f"   {i}. {f.carrier} {f.flight_id}: INR {f.price:,.0f} ({hrs}h {mins}m)")
+        else:
+            print("   ⚠️ No flights found (will use mock data)")
+            flights = []
+        
+        # [3/6] Search accommodations
+        print(f"\n{'='*80}")
+        print("[3/6] 🏨 SEARCHING ACCOMMODATIONS")
+        print("="*80)
+        print(f"   Location: {destination}")
+        print(f"   Check-in: {departure_date}, Check-out: {return_date}")
+        
+        hotels = self.hotel_agent.search_accommodations(
+            destination=destination,
+            check_in=departure_date,
+            check_out=return_date,
+            max_results=10
+        )
+        
+        if hotels:
+            print(f"✅ Found {len(hotels)} accommodations")
+            for i, h in enumerate(hotels[:3], 1):
+                print(f"   {i}. {h.name}: INR {h.price_per_night:,.0f}/night ({h.type})")
+        else:
+            print("   ⚠️ No accommodations found (will use mock data)")
+            hotels = []
+        
+        # [4/6] Search restaurants
+        print(f"\n{'='*80}")
+        print("[4/6] 🍽️  SEARCHING RESTAURANTS")
+        print("="*80)
+        print(f"   Location: {destination}")
+        if dietary:
+            print(f"   Dietary: {', '.join(dietary)}")
+        
+        restaurants = self.restaurant_agent.search_restaurants(
+            location=destination,
+            dietary_restrictions=dietary if dietary else None,
+            max_results=20
+        )
+        
+        if restaurants:
+            print(f"✅ Found {len(restaurants)} restaurants")
+            restaurants = self.restaurant_agent.rank_restaurants(restaurants)
+            for i, r in enumerate(restaurants[:3], 1):
+                print(f"   {i}. {r.name}: {r.cuisine_type}")
+        else:
+            print("   ⚠️ No restaurants found (will use mock data)")
+            restaurants = []
+        
+        # [5/6] Search activities
+        print(f"\n{'='*80}")
+        print("[5/6] 🎭 SEARCHING ACTIVITIES")
+        print("="*80)
+        print(f"   Location: {destination}")
+        print(f"   Interests: {', '.join(interests)}")
+        
+        activities = self.activity_agent.search_activities(
+            location=destination,
+            interests=interests if interests else None,
+            max_results=25
+        )
+        
+        if activities:
+            print(f"✅ Found {len(activities)} activities")
+            for i, a in enumerate(activities[:3], 1):
+                print(f"   {i}. {a.name}: {a.description[:50]}...")
+        else:
+            print("   ⚠️ No activities found (will use mock data)")
+            activities = []
+        
+        # [6/6] Optimize itinerary
+        print(f"\n{'='*80}")
+        print("[6/6] 🧮 OPTIMIZING ITINERARY (OR-Tools CP-SAT)")
+        print("="*80)
+        
+        optimizer = ItineraryOptimizer(user_profile)
+        
+        optimized = optimizer.optimize_itinerary(
+            flights=flights,
+            accommodations=hotels,
+            restaurants=restaurants,
+            activities=activities,
+            num_days=num_days
+        )
+        
+        if 'error' in optimized:
+            print(f"   ❌ Optimization error: {optimized['error']}")
             return
-
-        print("\n" + "="*70)
-        print("YOUR PERSONALIZED ITINERARY (REAL DATA)")
-        print("="*70)
-
-        currency = itinerary.get('currency', 'INR')
-        total_cost = itinerary.get('total_cost', 0)
-        num_days = itinerary.get('num_days', 0)
-
-        print(f"\n💰 Total Cost: {currency} {total_cost:,.2f}")
-        print(f"📅 Number of Days: {num_days}")
-
-        print("\n" + "-"*70)
-        print("DAY-BY-DAY BREAKDOWN")
-        print("-"*70)
-
-        for day in range(num_days):
-            if day not in itinerary.get('itinerary', {}):
+        
+        print(f"✅ Optimization complete!")
+        print(f"   Total cost: {optimized.get('currency', 'INR')} {optimized.get('total_cost', 0):,.2f}")
+        print(f"   Budget remaining: INR {budget - optimized.get('total_cost', 0):,.2f}")
+        
+        # Display day-by-day itinerary
+        self.display_itinerary(optimized, trip_details)
+        
+        return optimized
+    
+    def display_itinerary(self, itinerary: dict, trip_details: dict):
+        """Display formatted day-by-day itinerary"""
+        
+        print("\n" + "="*80)
+        print("📋 YOUR PERSONALIZED DAY-BY-DAY ITINERARY")
+        print("="*80)
+        
+        destination = trip_details.get('destination_city', 'Destination')
+        
+        print(f"\n🌍 Destination: {destination}")
+        print(f"💰 Total Cost: {itinerary.get('currency', 'INR')} {itinerary.get('total_cost', 0):,.2f}")
+        print(f"📅 Duration: {itinerary.get('num_days', 0)} days")
+        
+        # Day-by-day breakdown
+        for day_num in range(itinerary.get('num_days', 0)):
+            if day_num not in itinerary.get('itinerary', {}):
                 continue
-
-            items = itinerary['itinerary'][day]
-            print(f"\nDay {day + 1}:")
-            print("-" * 50)
-
+            
+            items = itinerary['itinerary'][day_num]
+            
+            print(f"\n{'─'*80}")
+            print(f"📅 DAY {day_num + 1}")
+            print(f"{'─'*80}")
+            
             if not items:
-                print("  (Rest day)")
+                print("   🌴 Rest day / Free time")
                 continue
-
+            
+            day_cost = 0
+            
             for item in items:
-                # Extract item name - handle various possible attributes
-                item_name = getattr(item, 'name', 'Unknown')
+                # Get item details
+                name = getattr(item, 'name', 'Unknown')
                 item_type = getattr(item, 'item_type', 'Unknown')
-
-                # Handle time - try different attributes
-                time_str = "00:00"
+                
+                # Time
+                time_str = "All day"
                 if hasattr(item, 'time_str'):
                     time_str = item.time_str
                 elif hasattr(item, 'departure_time'):
                     time_str = item.departure_time
                 elif hasattr(item, 'start_time'):
                     time_str = item.start_time
-
-                print(f"  [{time_str}] {item_name}")
-                print(f"    Type: {item_type}")
-
-                # Handle duration - try different attributes
-                if hasattr(item, 'duration_minutes'):
-                    print(f"    Duration: {item.duration_minutes} min")
-                elif hasattr(item, 'duration'):
-                    print(f"    Duration: {item.duration}")
-
-                # Handle cost - try different attributes
+                
+                # Duration
+                duration_str = ""
+                if hasattr(item, 'duration_minutes') and item.duration_minutes:
+                    hrs = item.duration_minutes // 60
+                    mins = item.duration_minutes % 60
+                    duration_str = f" ({hrs}h {mins}m)"
+                elif hasattr(item, 'duration_hours') and item.duration_hours:
+                    duration_str = f" ({item.duration_hours}h)"
+                
+                # Cost
                 cost = 0
                 if hasattr(item, 'cost'):
                     cost = item.cost
@@ -629,99 +916,102 @@ class CompleteLangChainAgenticAI:
                     cost = item.price
                 elif hasattr(item, 'price_per_night'):
                     cost = item.price_per_night
-
-                # Handle currency - use from itinerary or item
-                item_currency = currency
-                if hasattr(item, 'currency'):
-                    item_currency = item.currency
-
-                print(f"    Cost: {item_currency} {cost:,.2f}")
-                print()
-
-        print("\n" + "="*70)
-        print("✅ Itinerary Complete!")
-        print("="*70)
-
-    def _get_airport_code(self, destination: str) -> str:
-        """Get airport code for destination"""
-        codes = {
-            'tokyo': 'NRT', 'delhi': 'DEL', 'mumbai': 'BOM',
-            'singapore': 'SIN', 'bangkok': 'BKK', 'dubai': 'DXB',
-            'london': 'LHR', 'paris': 'CDG', 'new york': 'JFK'
-        }
-        for city, code in codes.items():
-            if city in destination.lower():
-                return code
-        return 'DEL'
-
-    def interactive_with_agents(self):
-        """Interactive mode that uses agents for queries"""
-
-        if not self.genai_model:
+                
+                day_cost += cost
+                
+                # Icon based on type
+                icon = "📍"
+                if 'flight' in item_type.lower():
+                    icon = "✈️"
+                elif 'hotel' in item_type.lower() or 'accommodation' in item_type.lower():
+                    icon = "🏨"
+                elif 'restaurant' in item_type.lower():
+                    icon = "🍽️"
+                elif 'activity' in item_type.lower():
+                    icon = "🎭"
+                
+                print(f"\n   {icon} [{time_str}] {name}{duration_str}")
+                print(f"      Type: {item_type}")
+                if cost > 0:
+                    print(f"      Cost: INR {cost:,.2f}")
+                
+                # Additional info
+                if hasattr(item, 'carrier'):
+                    print(f"      Carrier: {item.carrier}")
+                if hasattr(item, 'cuisine_type'):
+                    print(f"      Cuisine: {item.cuisine_type}")
+                if hasattr(item, 'rating') and item.rating:
+                    print(f"      Rating: {'⭐' * int(item.rating)}")
+            
+            if day_cost > 0:
+                print(f"\n   💵 Day {day_num + 1} Total: INR {day_cost:,.2f}")
+        
+        print("\n" + "="*80)
+        print("✅ ITINERARY GENERATION COMPLETE!")
+        print("="*80)
+    
+    def ask(self, query: str) -> str:
+        """Handle natural language queries"""
+        
+        print("\n🧠 Understanding your request...")
+        
+        # Check if it's a trip planning request
+        if any(word in query.lower() for word in ['plan', 'trip', 'itinerary', 'travel', 'visit']):
+            trip_details = self.extract_trip_details(query)
+            
+            if trip_details.get('destination_city'):
+                self.generate_itinerary(trip_details)
+                return "Itinerary generated above ↑"
+            else:
+                return "❓ I need at least a destination city. Example: 'Plan a trip to Paris from Bangalore'"
+        
+        return "❓ I specialize in planning complete trip itineraries. Try: 'Plan a trip from Bangalore to Paris for 5 days'"
+    
+    def interactive(self):
+        """Interactive mode"""
+        
+        if not self.llm:
+            print("❌ Agent not initialized. Check GOOGLE_API_KEY in .env")
             return
-
-        print("\n" + "="*70)
-        print("🌍 LANGCHAIN 0.3.x + GOOGLE GEMINI + REAL AGENTS")
-        print("    AI-POWERED TRAVEL ITINERARY GENERATOR")
-        print("="*70)
-        print("\n🤖 Chat with your AI travel planner!")
-        print("   (Uses real Flight, Hotel, Restaurant, Activity agents)")
-        print("   Type 'quit' to exit")
-        print("   Type 'generate' to generate full itinerary")
-        print("   Type 'help' for examples")
-        print("="*70)
-
-        examples = [
-            "Generate my complete trip to Tokyo",
-            "What are the best flights to Paris?",
-            "Show me 5-star hotels in Dubai",
-            "Find vegetarian restaurants in Rome",
-            "What activities should I do in Singapore?",
-        ]
-
+        
+        print("\n" + "="*80)
+        print("🌍 TRAVEL ITINERARY ORCHESTRATOR")
+        print("="*80)
+        print("\n💡 I create complete day-by-day travel itineraries!")
+        print("\n📝 Commands:")
+        print("   • 'generate' - Create sample 7-day Tokyo itinerary")
+        print("   • 'quit' - Exit")
+        print("\n📋 Examples:")
+        print("   • Plan a trip from Bangalore to Paris from March 1 to March 7")
+        print("   • I want to visit Tokyo for 5 days starting Feb 9 from Mumbai")
+        print("   • Create a 4-day Singapore trip from Delhi with budget 80000 INR")
+        print("="*80)
+        
         while True:
-            print()
-            user_input = input("You: ").strip()
-
-            if user_input.lower() == "quit":
-                print("\n👋 Thank you! Safe travels!")
-                break
-
-            if user_input.lower() == "generate":
-                itinerary = self.generate_full_itinerary()
-                self.display_itinerary(itinerary)
-                continue
-
-            if user_input.lower() == "help":
-                print("\n📚 Example queries:")
-                for i, ex in enumerate(examples, 1):
-                    print(f"   {i}. {ex}")
-                continue
-
+            user_input = input("\nYou: ").strip()
+            
             if not user_input:
                 continue
-
-            # Use Gemini for response
-            print(f"\n🧠 Gemini thinking...")
-            try:
-                response = self.genai_model.generate_content(user_input)
-                print(f"\n✅ Gemini: {response.text}")
-            except Exception as e:
-                print(f"\n❌ Error: {str(e)[:100]}")
+            
+            if user_input.lower() == "quit":
+                print("\n👋 Safe travels!")
+                break
+            
+            if user_input.lower() == "generate":
+                self.generate_itinerary()
+                continue
+            
+            self.conversation_history.append((user_input, ""))
+            response = self.ask(user_input)
+            print(f"\n{response}")
 
 
 if __name__ == "__main__":
-    print("\n" + "="*70)
-    print("🚀 COMPLETE LANGCHAIN 0.3.x + GOOGLE GEMINI WITH ALL AGENTS")
-    print("="*70)
-
-    ai = CompleteLangChainAgenticAI()
-
-    if ai.genai_model:
-        ai.interactive_with_agents()
+    orchestrator = TravelItineraryOrchestrator()
+    if orchestrator.llm:
+        orchestrator.interactive()
     else:
-        print("\n❌ Failed to initialize")
-        print("\n📝 Setup:")
-        print("   1. Get API key: https://makersuite.google.com/app/apikey")
-        print("   2. Add to .env: GOOGLE_API_KEY=your_key")
-        print("   3. Run: python llm_orchestrator.py")
+        print("\n❌ Setup required:")
+        print("   1. Create .env file")
+        print("   2. Add: GOOGLE_API_KEY=your_key")
+        print("   3. Get key from: https://makersuite.google.com/app/apikey")

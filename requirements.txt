@@ -1,18 +1,46 @@
-# === Core LLM / LangChain stack ===
-langchain==0.0.352
-langchain-core==0.1.23
-langchain-community==0.0.20
-langsmith==0.0.87
+# # === Core LLM / LangChain stack ===
+# langchain==0.0.352
+# langchain-core==0.1.23
+# langchain-community==0.0.20
+# langsmith==0.0.87
 
-# === Google Generative AI (Gemini) ===
-google-generativeai==0.3.2
-google-ai-generativelanguage==0.4.0
-google-auth==2.42.0
-google-api-core==2.28.1
-googleapis-common-protos==1.71.0
+# # === Google Generative AI (Gemini) ===
+# google-generativeai==0.3.2
+# google-ai-generativelanguage==0.4.0
+# google-auth==2.42.0
+# google-api-core==2.28.1
+# googleapis-common-protos==1.71.0
+
+# # === Amadeus (Travel APIs) ===
+# amadeus==2.0.0
+
+# # === Utility & framework packages ===
+# python-dotenv==1.0.0
+
+# === Core LangChain Stack (Latest versions as of Jan 2025) ===
+langchain==0.3.7
+langchain-core==0.3.24
+langchain-community==0.3.7
+langsmith>=0.1.147,<0.2.0
+
+# === Google Gemini Integration for LangChain ===
+langchain-google-genai==2.0.5
+google-generativeai==0.8.3
 
 # === Amadeus (Travel APIs) ===
 amadeus==2.0.0
 
-# === Utility & framework packages ===
-python-dotenv==1.0.0
+# === Optimization ===
+ortools>=9.11.4210
+
+# === Utilities ===
+python-dotenv>=1.1.1
+requests>=2.32.3
+
+# === NumPy (Compatible version) ===
+# Using 1.x for better compatibility with ortools and other packages
+numpy>=1.24.0,<2.0.0
+
+# === Structured Output ===
+pydantic>=2.10.4
+pydantic-settings>=2.7.0

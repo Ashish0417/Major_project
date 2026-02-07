@@ -269,7 +269,7 @@
 #         if hotels:
 #             print(f"✅ Found {len(hotels)} accommodations")
 #             for i, h in enumerate(hotels[:3], 1):
-#                 print(f"   {i}. {h.name}: INR {h.price_per_night:,.0f}/night ({h.accommodation_type})")
+#                 print(f"   {i}. {h.name}: INR {h.price_per_night:,.0f}/night ({h.type})")
 #         else:
 #             print("   ⚠️ No accommodations found (will use mock data)")
 #             hotels = []
@@ -528,6 +528,7 @@ from activity_agent import ActivityAgent
 from optimizer import ItineraryOptimizer
 from trend_analyzer import TrendAnalyzer
 from user_profile import create_sample_profile, UserProfile, TripDates
+from currency_converter import CurrencyConverter, convert_to_inr
 
 load_dotenv()
 
@@ -558,6 +559,9 @@ class TravelItineraryOrchestrator:
         self.restaurant_agent = RestaurantAgent()
         self.activity_agent = ActivityAgent()
         self.trend_analyzer = TrendAnalyzer()
+        self.currency_converter = CurrencyConverter()
+        
+        print(f"   💱 Currency converter ready ({len(self.currency_converter.rates)} currencies)")
         
         # Airport code mapping
         self.airport_codes = {
@@ -756,7 +760,9 @@ Examples:
             for i, f in enumerate(flights[:3], 1):
                 hrs = f.duration_minutes // 60
                 mins = f.duration_minutes % 60
-                print(f"   {i}. {f.carrier} {f.flight_id}: INR {f.price:,.0f} ({hrs}h {mins}m)")
+                original_price = f"{f.currency} {f.price:,.0f}"
+                inr_price = self.currency_converter.convert(f.price, f.currency, 'INR')
+                print(f"   {i}. {f.carrier} {f.flight_id}: {original_price} (≈ INR {inr_price:,.0f}) ({hrs}h {mins}m)")
         else:
             print("   ⚠️ No flights found (will use mock data)")
             flights = []
@@ -778,7 +784,9 @@ Examples:
         if hotels:
             print(f"✅ Found {len(hotels)} accommodations")
             for i, h in enumerate(hotels[:3], 1):
-                print(f"   {i}. {h.name}: INR {h.price_per_night:,.0f}/night ({h.type})")
+                original_price = f"{h.currency} {h.price_per_night:,.0f}"
+                inr_price = self.currency_converter.convert(h.price_per_night, h.currency, 'INR')
+                print(f"   {i}. {h.name}: {original_price}/night (≈ INR {inr_price:,.0f}) [{h.type}]")
         else:
             print("   ⚠️ No accommodations found (will use mock data)")
             hotels = []
@@ -829,16 +837,75 @@ Examples:
         
         # [6/6] Optimize itinerary
         print(f"\n{'='*80}")
-        print("[6/6] 🧮 OPTIMIZING ITINERARY (OR-Tools CP-SAT)")
+        print("[6/6] 🧮 OPTIMIZING ITINERARY")
         print("="*80)
+        
+        # Convert all prices to base currency (INR) for optimization
+        print("   💱 Converting all prices to INR...")
+        base_currency = 'INR'
+        
+        # Convert flights
+        flights_converted = []
+        for flight in flights:
+            converted_price = self.currency_converter.convert(
+                flight.price, 
+                flight.currency, 
+                base_currency
+            )
+            # Create new flight object with converted price
+            flight.price = converted_price
+            flight.currency = base_currency
+            flights_converted.append(flight)
+        
+        # Convert hotels
+        hotels_converted = []
+        for hotel in hotels:
+            converted_price = self.currency_converter.convert(
+                hotel.price_per_night,
+                hotel.currency,
+                base_currency
+            )
+            hotel.price_per_night = converted_price
+            hotel.currency = base_currency
+            hotels_converted.append(hotel)
+        
+        # Convert restaurants
+        restaurants_converted = []
+        for restaurant in restaurants:
+            converted_price = self.currency_converter.convert(
+                restaurant.average_meal_cost,
+                restaurant.currency,
+                base_currency
+            )
+            restaurant.average_meal_cost = converted_price
+            restaurant.currency = base_currency
+            restaurants_converted.append(restaurant)
+        
+        # Convert activities
+        activities_converted = []
+        for activity in activities:
+            if hasattr(activity, 'cost') and hasattr(activity, 'currency'):
+                converted_price = self.currency_converter.convert(
+                    activity.price,
+                    activity.currency,
+                    base_currency
+                )
+                activity.price = converted_price
+                activity.currency = base_currency
+            activities_converted.append(activity)
+        
+        print(f"   ✅ All prices converted to {base_currency}")
+        
+        # Run optimizer with converted prices
+        print("   🔧 Running OR-Tools CP-SAT optimizer...")
         
         optimizer = ItineraryOptimizer(user_profile)
         
         optimized = optimizer.optimize_itinerary(
-            flights=flights,
-            accommodations=hotels,
-            restaurants=restaurants,
-            activities=activities,
+            flights=flights_converted,
+            accommodations=hotels_converted,
+            restaurants=restaurants_converted,
+            activities=activities_converted,
             num_days=num_days
         )
         

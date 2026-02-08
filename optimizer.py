@@ -129,20 +129,37 @@ class ItineraryOptimizer:
         """Convert agent proposals to ItineraryItems"""
         items = []
 
-        # Add flights (day 0 for outbound, last day for return)
-        for i, flight in enumerate(flights[:3]):  # Top 3 flights
+        # Add transport (flights or ground transport)
+        for i, transport in enumerate(flights[:10]):  # Top 10 transport options
+            # Determine if it's a flight or ground transport
+            if hasattr(transport, 'carrier'):
+                # It's a flight
+                item_type = "flight"
+                name = f"{transport.carrier} {transport.origin}-{transport.destination}"
+                duration = transport.duration_minutes
+                popularity = transport.reliability_score
+            elif hasattr(transport, 'type') and hasattr(transport, 'provider'):
+                # It's ground transport
+                item_type = "ground_transport"
+                name = f"{transport.type.title()} ({transport.provider})"
+                duration = transport.duration_minutes
+                popularity = 0.8  # Default popularity for ground transport
+            else:
+                # Unknown transport type, skip
+                continue
+            
             item = ItineraryItem(
-                item_id=f"flight_{i}",
-                item_type="flight",
-                name=f"{flight.carrier} {flight.origin}-{flight.destination}",
+                item_id=f"transport_{i}",
+                item_type=item_type,
+                name=name,
                 day=0,
                 start_time=0,
-                duration=flight.duration_minutes,
-                cost=flight.price,
-                latitude=0, longitude=0,  # Not used for flights
+                duration=duration,
+                cost=transport.price,
+                latitude=0, longitude=0,  # Not used for transport
                 preference_score=0.8,
-                popularity_score=flight.reliability_score,
-                mandatory=True if i == 0 else False
+                popularity_score=popularity,
+                mandatory=False  # Will be enforced by constraint, not individual flag
             )
             items.append(item)
 
@@ -297,6 +314,77 @@ class ItineraryOptimizer:
 
         if accommodation_constraints > 0:
             print(f"  ✓ Added {accommodation_constraints} accommodation constraints (1 per day)")
+        
+        # Exactly one transport (flight OR ground_transport) for entire trip
+        transport_items = [item for item in items 
+                          if item.item_type in ['flight', 'ground_transport']]
+        
+        if transport_items:
+            # Exactly 1 transport for the entire trip
+            self.model.Add(
+                sum(item_vars[item.item_id] for item in transport_items) == 1
+            )
+            print(f"  ✓ Added transport constraint: exactly 1 transport for trip")
+            print(f"     ({len(transport_items)} transport options available)")
+        
+        # NEW: Each unique activity/restaurant can only be selected once across entire trip
+        # Group items by their base name (without day/time suffix)
+        activity_groups = {}
+        restaurant_groups = {}
+        
+        for item in items:
+            if item.item_type == 'activity':
+                # Extract base ID (e.g., "act_0" from "act_0_day1_t540")
+                base_id = '_'.join(item.item_id.split('_')[:2])  # "act_0"
+                if base_id not in activity_groups:
+                    activity_groups[base_id] = []
+                activity_groups[base_id].append(item)
+            
+            elif item.item_type == 'restaurant':
+                # Extract base ID (e.g., "rest_0" from "rest_0_day1_t720")
+                base_id = '_'.join(item.item_id.split('_')[:2])  # "rest_0"
+                if base_id not in restaurant_groups:
+                    restaurant_groups[base_id] = []
+                restaurant_groups[base_id].append(item)
+        
+        # Add constraint: each activity can be selected at most once
+        activity_uniqueness_count = 0
+        for base_id, item_list in activity_groups.items():
+            if len(item_list) > 1:  # Only add constraint if there are multiple instances
+                # At most 1 instance of this activity across all days/times
+                self.model.Add(
+                    sum(item_vars[item.item_id] for item in item_list) <= 1
+                )
+                activity_uniqueness_count += 1
+        
+        if activity_uniqueness_count > 0:
+            print(f"  ✓ Added {activity_uniqueness_count} activity uniqueness constraints")
+            print(f"     (each activity max 1x per trip)")
+        
+        # Add constraint: each restaurant can be selected at most once per day
+        # (allow same restaurant on different days, but not same day)
+        restaurant_uniqueness_count = 0
+        for day in range(num_days):
+            day_restaurant_groups = {}
+            
+            for item in items:
+                if item.item_type == 'restaurant' and item.day == day:
+                    base_id = '_'.join(item.item_id.split('_')[:2])
+                    if base_id not in day_restaurant_groups:
+                        day_restaurant_groups[base_id] = []
+                    day_restaurant_groups[base_id].append(item)
+            
+            # At most 1 instance per restaurant per day
+            for base_id, item_list in day_restaurant_groups.items():
+                if len(item_list) > 1:
+                    self.model.Add(
+                        sum(item_vars[item.item_id] for item in item_list) <= 1
+                    )
+                    restaurant_uniqueness_count += 1
+        
+        if restaurant_uniqueness_count > 0:
+            print(f"  ✓ Added {restaurant_uniqueness_count} restaurant uniqueness constraints")
+            print(f"     (each restaurant max 1x per day)")
 
     def _set_objective(self, items, item_vars):
         """Set multi-objective optimization function"""
@@ -355,6 +443,7 @@ class ItineraryOptimizer:
             'total_cost': round(total_cost, 2),
             'currency': 'INR',
             'num_days': num_days,
+            'num_transport': sum(1 for item in selected_items if item.item_type in ['flight', 'ground_transport']),
             'num_activities': sum(1 for item in selected_items if item.item_type == 'activity'),
             'num_restaurants': sum(1 for item in selected_items if item.item_type == 'restaurant'),
             'num_accommodations': sum(1 for item in selected_items if item.item_type == 'accommodation'),

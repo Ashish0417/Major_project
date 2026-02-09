@@ -286,6 +286,23 @@ class ItineraryOptimizer:
 
         if constraint_count > 0:
             print(f"  ✓ Added activity limit: max {max_activities} per day")
+        
+        min_activities = 1  # At least 1 activity per day
+        min_constraint_count = 0
+        
+        for day in range(num_days):
+            day_activities = [item for item in items 
+                            if item.day == day and item.item_type == 'activity']
+
+            if day_activities:
+                # MINIMUM constraint (NEW - this is the critical fix!)
+                self.model.Add(
+                    sum(item_vars[item.item_id] for item in day_activities) >= min_activities
+                )
+                min_constraint_count += 1
+
+        if min_constraint_count > 0:
+            print(f"  ✓ Added MINIMUM activity requirement: >= {min_activities} per day")
 
     def _add_mandatory_constraints(self, items, item_vars):
         """Mandatory items must be selected"""

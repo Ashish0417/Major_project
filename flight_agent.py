@@ -355,6 +355,7 @@ class FlightOption:
     class_type: str
     reliability_score: float = 0.9
     available_seats: int = 10
+    item_type: str = "flight"
 
 
 class FlightAgent:

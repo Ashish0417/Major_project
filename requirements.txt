@@ -28,7 +28,7 @@ langchain-google-genai==2.0.5
 google-generativeai==0.8.3
 
 # === Amadeus (Travel APIs) ===
-amadeus==2.0.0
+amadeus==10.0.0
 
 # === Optimization ===
 ortools>=9.11.4210

@@ -21,6 +21,8 @@ from optimizer import ItineraryOptimizer
 from trend_analyzer import TrendAnalyzer
 from user_profile import create_sample_profile, UserProfile, TripDates
 from currency_converter import CurrencyConverter, convert_to_inr
+# Add to imports at top of file
+from itinerary_enhancer import ItineraryEnhancer, display_enhanced_itinerary
 
 load_dotenv()
 
@@ -522,8 +524,9 @@ Examples:
         print(f"   Budget remaining: INR {budget - optimized.get('total_cost', 0):,.2f}")
         
         # Display day-by-day itinerary
-        self.display_itinerary(optimized, trip_details)
-        
+        # self.display_itinerary(optimized, trip_details)
+        self.display_itinerary_with_transport(optimized, trip_details)
+
         return optimized
     
     def display_itinerary(self, itinerary: dict, trip_details: dict):
@@ -648,6 +651,59 @@ Examples:
         print("\n" + "="*80)
         print("✅ ITINERARY GENERATION COMPLETE!")
         print("="*80)
+
+    def display_itinerary_with_transport(self, itinerary, trip_details: dict):
+        """Display itinerary with transport - works with dict format"""
+        
+        print("\n🚗 Adding local transport between locations...")
+        
+        # Handle dict format from optimizer
+        daily_schedules = None
+        
+        # Try to extract daily schedules
+        if hasattr(itinerary, 'daily_schedules'):
+            daily_schedules = itinerary.daily_schedules
+        elif isinstance(itinerary, dict) and 'itinerary' in itinerary:
+            # Convert old dict format
+            from dataclasses import dataclass
+            from typing import List, Any
+            
+            @dataclass
+            class DaySchedule:
+                day_number: int
+                items: List[Any]
+            
+            daily_schedules = []
+            for day_num in range(itinerary.get('num_days', 7)):
+                if day_num in itinerary['itinerary']:
+                    daily_schedules.append(DaySchedule(
+                        day_number=day_num + 1,
+                        items=itinerary['itinerary'][day_num]
+                    ))
+            
+            print(f"   ✓ Converted {len(daily_schedules)} days")
+        
+        if not daily_schedules:
+            print(f"   Using standard display")
+            self.display_itinerary(itinerary, trip_details)
+            return
+        
+        # Enhance with transport
+        try:
+            from itinerary_enhancer import ItineraryEnhancer, display_enhanced_itinerary
+            
+            enhancer = ItineraryEnhancer(budget_conscious=True)
+            enhanced = enhancer.enhance_itinerary(daily_schedules)
+            
+            total_budget = trip_details.get('budget', 0)
+            if hasattr(self, 'user_profile') and hasattr(self.user_profile, 'budget'):
+                total_budget = self.user_profile.budget
+            
+            display_enhanced_itinerary(enhanced, total_budget=total_budget)
+            
+        except Exception as e:
+            print(f"   ⚠️ Transport error: {e}")
+            self.display_itinerary(itinerary, trip_details)
     
     def ask(self, query: str) -> str:
         """Handle natural language queries"""

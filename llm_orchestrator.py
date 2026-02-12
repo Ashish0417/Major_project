@@ -24,6 +24,10 @@ from currency_converter import CurrencyConverter, convert_to_inr
 # Add to imports at top of file
 from itinerary_enhancer import ItineraryEnhancer, display_enhanced_itinerary
 
+from datetime import datetime, timedelta
+from dataclasses import dataclass
+import random
+
 load_dotenv()
 
 
@@ -523,9 +527,10 @@ Examples:
         print(f"   Total cost: {optimized.get('currency', 'INR')} {optimized.get('total_cost', 0):,.2f}")
         print(f"   Budget remaining: INR {budget - optimized.get('total_cost', 0):,.2f}")
         
+        # Add return journey to last day
+        result = self.add_return_journey(optimized, trip_details)
         # Display day-by-day itinerary
-        # self.display_itinerary(optimized, trip_details)
-        self.display_itinerary_with_transport(optimized, trip_details)
+        self.display_itinerary_with_transport(result, trip_details)
 
         return optimized
     
@@ -651,6 +656,753 @@ Examples:
         print("\n" + "="*80)
         print("✅ ITINERARY GENERATION COMPLETE!")
         print("="*80)
+
+
+    """
+    FIX: Add City to Airport Code Mapping
+    This allows return journey to work even without airport codes in trip_details
+    """
+
+    def add_return_journey(self, itinerary, trip_details: dict):
+        """
+        Add return flight/transport to the last day of itinerary
+        NOW WITH CITY-TO-AIRPORT-CODE MAPPING
+        """
+        
+        print("\n" + "="*80)
+        print("🔄 ADDING RETURN JOURNEY")
+        print("="*80)
+        
+        # City to airport code mapping
+        CITY_TO_AIRPORT = {
+            # Major Indian Cities
+            'bangalore': 'BLR',
+            'bengaluru': 'BLR',
+            'mumbai': 'BOM',
+            'delhi': 'DEL',
+            'new delhi': 'DEL',
+            'kolkata': 'CCU',
+            'chennai': 'MAA',
+            'hyderabad': 'HYD',
+            'pune': 'PNQ',
+            'ahmedabad': 'AMD',
+            'jaipur': 'JAI',
+            'kochi': 'COK',
+            'cochin': 'COK',
+            'goa': 'GOI',
+            'thiruvananthapuram': 'TRV',
+            'trivandrum': 'TRV',
+            'lucknow': 'LKO',
+            'chandigarh': 'IXC',
+            'coimbatore': 'CJB',
+            'mangalore': 'IXE',
+            'mangaluru': 'IXE',
+            'visakhapatnam': 'VTZ',
+            'vizag': 'VTZ',
+            'indore': 'IDR',
+            'bhubaneswar': 'BBI',
+            'nagpur': 'NAG',
+            'vadodara': 'BDQ',
+            'raipur': 'RPR',
+            'surat': 'STV',
+            'amritsar': 'ATQ',
+            'varanasi': 'VNS',
+            'patna': 'PAT',
+            'ranchi': 'IXR',
+            'guwahati': 'GAU',
+            'imphal': 'IMF',
+            'agartala': 'IXA',
+            
+            # International Cities
+            'paris': 'CDG',
+            'london': 'LHR',
+            'new york': 'JFK',
+            'dubai': 'DXB',
+            'singapore': 'SIN',
+            'bangkok': 'BKK',
+            'kuala lumpur': 'KUL',
+            'hong kong': 'HKG',
+            'tokyo': 'NRT',
+            'sydney': 'SYD',
+            'melbourne': 'MEL',
+            'los angeles': 'LAX',
+            'san francisco': 'SFO',
+            'toronto': 'YYZ',
+            'vancouver': 'YVR',
+            'amsterdam': 'AMS',
+            'frankfurt': 'FRA',
+            'zurich': 'ZRH',
+            'rome': 'FCO',
+            'barcelona': 'BCN',
+            'madrid': 'MAD',
+            'istanbul': 'IST',
+            'doha': 'DOH',
+            'abu dhabi': 'AUH',
+            'muscat': 'MCT',
+            'colombo': 'CMB',
+            'kathmandu': 'KTM',
+            'dhaka': 'DAC',
+            'male': 'MLE',
+            'phuket': 'HKT',
+            'denpasar': 'DPS',
+            'bali': 'DPS',
+            'beijing': 'PEK',
+            'shanghai': 'PVG',
+            'seoul': 'ICN',
+            'osaka': 'KIX',
+        }
+        
+        # DEBUG: Show what trip_details contains
+        print(f"   🔍 trip_details keys: {list(trip_details.keys())}")
+        
+        # Extract origin and destination cities
+        origin = (trip_details.get('origin_city') or 
+                trip_details.get('origin') or 
+                trip_details.get('from_city'))
+        
+        destination = (trip_details.get('destination_city') or 
+                    trip_details.get('destination') or 
+                    trip_details.get('to_city'))
+        
+        # Try to get airport codes directly first
+        origin_code = (trip_details.get('origin_code') or 
+                    trip_details.get('from_code') or 
+                    trip_details.get('origin_airport'))
+        
+        destination_code = (trip_details.get('destination_code') or 
+                        trip_details.get('to_code') or 
+                        trip_details.get('destination_airport'))
+        
+        # If no airport codes, convert from city names
+        if not origin_code and origin:
+            origin_lower = origin.lower().strip()
+            origin_code = CITY_TO_AIRPORT.get(origin_lower)
+            if origin_code:
+                print(f"   ✓ Mapped '{origin}' → {origin_code}")
+            else:
+                print(f"   ⚠️ Unknown city: '{origin}' (add to mapping)")
+        
+        if not destination_code and destination:
+            destination_lower = destination.lower().strip()
+            destination_code = CITY_TO_AIRPORT.get(destination_lower)
+            if destination_code:
+                print(f"   ✓ Mapped '{destination}' → {destination_code}")
+            else:
+                print(f"   ⚠️ Unknown city: '{destination}' (add to mapping)")
+        
+        # Show what we extracted
+        print(f"   📍 Origin: {origin} ({origin_code or 'Unknown'})")
+        print(f"   📍 Destination: {destination} ({destination_code or 'Unknown'})")
+        
+        # Get other details
+        departure_date = trip_details.get('departure_date', '2026-03-01')
+        num_days = trip_details.get('num_days', 7)
+        
+        # Validate we have airport codes
+        if not origin_code or not destination_code:
+            print(f"\n   ❌ ERROR: Could not determine airport codes!")
+            print(f"      Origin code: {origin_code}")
+            print(f"      Destination code: {destination_code}")
+            
+            if not origin_code and origin:
+                print(f"\n   💡 Please add '{origin.lower()}' to the CITY_TO_AIRPORT mapping")
+            if not destination_code and destination:
+                print(f"   💡 Please add '{destination.lower()}' to the CITY_TO_AIRPORT mapping")
+            
+            print(f"\n   ⚠️ Cannot add return journey without airport codes")
+            return itinerary
+        
+        # Calculate return date (last day)
+        from datetime import datetime, timedelta
+        try:
+            dep_date = datetime.strptime(departure_date, '%Y-%m-%d')
+            return_date = (dep_date + timedelta(days=num_days - 1)).strftime('%Y-%m-%d')
+        except Exception as e:
+            print(f"   ⚠️ Date parsing error: {e}")
+            return_date = departure_date
+        
+        print(f"   🛬 Return route: {destination} ({destination_code}) → {origin} ({origin_code})")
+        print(f"   📅 Return date: {return_date}")
+        
+        # Try to search for return flight
+        return_flight = None
+        try:
+            print(f"   🔍 Searching return flights...")
+            return_flights = self.flight_agent.search_flights(
+                origin=destination_code,      # Flying FROM destination
+                destination=origin_code,      # Flying TO origin
+                departure_date=return_date,
+                adults=1,
+                max_results=5
+            )
+            
+            if return_flights and len(return_flights) > 0:
+                # Select cheapest return flight
+                return_flight = min(return_flights, key=lambda x: x.price)
+                print(f"   ✅ Found {len(return_flights)} return flights")
+                print(f"   ✓ Selected: {return_flight.carrier} {destination_code}→{origin_code}")
+                print(f"   💰 Cost: {return_flight.currency} {return_flight.price:,.2f}")
+            else:
+                print(f"   ℹ️ No return flights from API, generating mock")
+                return_flight = self._create_mock_return_flight(
+                    destination_code, origin_code, return_date, destination, origin
+                )
+        
+        except Exception as e:
+            print(f"   ⚠️ Return flight search error: {str(e)[:100]}")
+            print(f"   ℹ️ Generating mock return flight")
+            return_flight = self._create_mock_return_flight(
+                destination_code, origin_code, return_date, destination, origin
+            )
+        
+        if not return_flight:
+            print(f"   ❌ Could not add return journey")
+            return itinerary
+        
+        # Add return flight to itinerary
+        added = False
+        try:
+            # Handle dict format with 'itinerary' key
+            if isinstance(itinerary, dict) and 'itinerary' in itinerary:
+                last_day_idx = num_days - 1  # 0-indexed
+                
+                # Ensure last day exists in itinerary
+                if last_day_idx not in itinerary['itinerary']:
+                    itinerary['itinerary'][last_day_idx] = []
+                
+                # Add return flight at start of last day (morning departure)
+                itinerary['itinerary'][last_day_idx].insert(0, return_flight)
+                
+                # Update total cost
+                if 'total_cost' in itinerary:
+                    itinerary['total_cost'] += return_flight.price
+                
+                added = True
+                print(f"   ✅ Return flight added to Day {num_days}")
+            
+            # Handle daily_schedules format
+            elif hasattr(itinerary, 'daily_schedules') and itinerary.daily_schedules:
+                last_day_schedule = itinerary.daily_schedules[-1]
+                
+                # Ensure items list exists
+                if not hasattr(last_day_schedule, 'items'):
+                    last_day_schedule.items = []
+                
+                # Add to beginning of last day
+                last_day_schedule.items.insert(0, return_flight)
+                
+                added = True
+                print(f"   ✅ Return flight added to Day {last_day_schedule.day_number}")
+            
+            else:
+                print(f"   ⚠️ Unknown itinerary format")
+                print(f"   Type: {type(itinerary)}")
+                if isinstance(itinerary, dict):
+                    print(f"   Keys: {list(itinerary.keys())}")
+        
+        except Exception as e:
+            print(f"   ❌ Error adding return flight: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        if added:
+            print(f"   🎉 Return journey successfully added!")
+        
+        return itinerary
+
+
+    # Keep your existing _create_mock_return_flight method
+    # (The one from the previous file works fine)
+
+
+    def _create_mock_return_flight(self, origin_code: str, destination_code: str, 
+                                date: str, origin_city: str = None, 
+                                destination_city: str = None):
+        """
+        Create a realistic mock return flight
+        
+        Args:
+            origin_code: Airport code departing from (e.g., 'BOM')
+            destination_code: Airport code arriving at (e.g., 'BLR')
+            date: Departure date (YYYY-MM-DD)
+            origin_city: Origin city name
+            destination_city: Destination city name
+        """
+        from datetime import datetime, timedelta
+        from dataclasses import dataclass
+        import random
+        
+        # Airlines operating in India
+        carriers = [
+            ('AI', 'Air India'),
+            ('6E', 'IndiGo'),
+            ('UK', 'Vistara'),
+            ('SG', 'SpiceJet'),
+            ('G8', 'Go First')
+        ]
+        
+        carrier_code, carrier_name = random.choice(carriers)
+        
+        # Generate realistic departure/arrival times
+        try:
+            dep_dt = datetime.strptime(date, '%Y-%m-%d')
+            
+            # Morning/afternoon departure (6am - 4pm)
+            dep_hour = random.randint(6, 16)
+            dep_minute = random.choice([0, 15, 30, 45])
+            dep_time = dep_dt.replace(hour=dep_hour, minute=dep_minute)
+            
+            # Flight duration (1-3 hours for domestic, 6-12 for international)
+            is_domestic = (origin_code[:2] == destination_code[:2] == 'IN' or 
+                        origin_code in ['BLR', 'BOM', 'DEL', 'MAA', 'CCU', 'HYD'] and 
+                        destination_code in ['BLR', 'BOM', 'DEL', 'MAA', 'CCU', 'HYD'])
+            
+            if is_domestic:
+                duration_hours = random.randint(1, 3)
+                duration_minutes = random.randint(0, 59)
+            else:
+                duration_hours = random.randint(6, 12)
+                duration_minutes = random.randint(0, 59)
+            
+            total_duration_mins = duration_hours * 60 + duration_minutes
+            
+            arr_time = dep_time + timedelta(minutes=total_duration_mins)
+            
+            dep_time_str = dep_time.isoformat()
+            arr_time_str = arr_time.isoformat()
+            
+        except Exception as e:
+            print(f"      ⚠️ Date error: {e}")
+            dep_time_str = f"{date}T10:00:00"
+            arr_time_str = f"{date}T13:00:00"
+            total_duration_mins = 180
+            is_domestic = True
+        
+        # Realistic pricing
+        if is_domestic:
+            base_price = random.uniform(3000, 8000)
+        else:
+            base_price = random.uniform(25000, 45000)
+        
+        price = round(base_price, 2)
+        
+        # Create return flight object
+        @dataclass
+        class ReturnFlight:
+            flight_id: str
+            origin: str
+            destination: str
+            departure_time: str
+            arrival_time: str
+            duration_minutes: int
+            price: float
+            currency: str
+            carrier: str
+            segments: int
+            class_type: str
+            reliability_score: float
+            available_seats: int
+            item_type: str
+            is_return: bool
+            
+            @property
+            def name(self):
+                return f"{self.carrier} {self.origin}-{self.destination} (Return)"
+            
+            @property
+            def duration(self):
+                return self.duration_minutes
+        
+        flight = ReturnFlight(
+            flight_id=f"RET{random.randint(1000, 9999)}",
+            origin=origin_code,
+            destination=destination_code,
+            departure_time=dep_time_str,
+            arrival_time=arr_time_str,
+            duration_minutes=total_duration_mins,
+            price=price,
+            currency='INR',
+            carrier=carrier_code,
+            segments=random.randint(1, 2),
+            class_type='economy',
+            reliability_score=random.uniform(0.85, 0.95),
+            available_seats=random.randint(10, 50),
+            item_type='flight',
+            is_return=True
+        )
+        
+        hrs = total_duration_mins // 60
+        mins = total_duration_mins % 60
+        print(f"   📝 Generated: {carrier_code} {origin_code}→{destination_code} | "
+            f"{hrs}h {mins}m | INR {price:,.2f}")
+        
+        return flight
+
+
+    # def add_return_journey(self, itinerary, trip_details: dict):
+    #     """
+    #     Add return flight/transport to the last day of itinerary
+    #     Automatically searches for return options from destination back to origin
+    #     """
+        
+    #     print("\n" + "="*80)
+    #     print("🔄 ADDING RETURN JOURNEY")
+    #     print("="*80)
+        
+    #     # Extract trip details
+    #     origin = trip_details.get('origin_city', 'Bangalore')
+    #     destination = trip_details.get('destination_city', 'Paris')
+    #     origin_code = trip_details.get('origin_code', 'BLR')
+    #     destination_code = trip_details.get('destination_code', 'CDG')
+    #     departure_date = trip_details.get('departure_date', '2026-03-01')
+    #     num_days = trip_details.get('num_days', 7)
+        
+    #     # Calculate return date (last day)
+    #     try:
+    #         dep_date = datetime.strptime(departure_date, '%Y-%m-%d')
+    #         return_date = (dep_date + timedelta(days=num_days - 1)).strftime('%Y-%m-%d')
+    #     except Exception as e:
+    #         print(f"   ⚠️ Date parsing error, using last day")
+    #         return_date = departure_date
+        
+    #     print(f"   🛬 Return route: {destination} ({destination_code}) → {origin} ({origin_code})")
+    #     print(f"   📅 Return date: {return_date}")
+        
+    #     # Try to search for return flight
+    #     return_flight = None
+    #     try:
+    #         print(f"   🔍 Searching return flights...")
+    #         return_flights = self.flight_agent.search_flights(
+    #             origin=destination_code,
+    #             destination=origin_code,
+    #             departure_date=return_date,
+    #             adults=1,
+    #             max_results=5
+    #         )
+            
+    #         if return_flights and len(return_flights) > 0:
+    #             # Select cheapest return flight
+    #             return_flight = min(return_flights, key=lambda x: x.price)
+    #             print(f"   ✅ Found {len(return_flights)} return flights")
+    #             print(f"   ✓ Selected: {return_flight.carrier} flight")
+    #             print(f"   💰 Cost: {return_flight.currency} {return_flight.price:,.2f}")
+    #         else:
+    #             print(f"   ℹ️ No return flights from API, generating mock")
+    #             return_flight = self._create_mock_return_flight(
+    #                 destination_code, origin_code, return_date, destination, origin
+    #             )
+        
+    #     except Exception as e:
+    #         print(f"   ⚠️ Return flight search error: {str(e)[:100]}")
+    #         print(f"   ℹ️ Generating mock return flight")
+    #         return_flight = self._create_mock_return_flight(
+    #             destination_code, origin_code, return_date, destination, origin
+    #         )
+        
+    #     if not return_flight:
+    #         print(f"   ❌ Could not add return journey")
+    #         return itinerary
+        
+    #     # Add return flight to itinerary
+    #     added = False
+    #     try:
+    #         # Handle dict format with 'itinerary' key
+    #         if isinstance(itinerary, dict) and 'itinerary' in itinerary:
+    #             last_day_idx = num_days - 1  # 0-indexed
+                
+    #             # Ensure last day exists in itinerary
+    #             if last_day_idx not in itinerary['itinerary']:
+    #                 itinerary['itinerary'][last_day_idx] = []
+                
+    #             # Add return flight at start of last day (morning departure)
+    #             itinerary['itinerary'][last_day_idx].insert(0, return_flight)
+                
+    #             # Update total cost
+    #             if 'total_cost' in itinerary:
+    #                 itinerary['total_cost'] += return_flight.price
+                
+    #             added = True
+    #             print(f"   ✅ Return flight added to Day {num_days}")
+            
+    #         # Handle daily_schedules format
+    #         elif hasattr(itinerary, 'daily_schedules') and itinerary.daily_schedules:
+    #             last_day_schedule = itinerary.daily_schedules[-1]
+                
+    #             # Ensure items list exists
+    #             if not hasattr(last_day_schedule, 'items'):
+    #                 last_day_schedule.items = []
+                
+    #             # Add to beginning of last day
+    #             last_day_schedule.items.insert(0, return_flight)
+                
+    #             added = True
+    #             print(f"   ✅ Return flight added to Day {last_day_schedule.day_number}")
+            
+    #         else:
+    #             print(f"   ⚠️ Unknown itinerary format")
+    #             print(f"   Type: {type(itinerary)}")
+    #             if isinstance(itinerary, dict):
+    #                 print(f"   Keys: {list(itinerary.keys())}")
+        
+    #     except Exception as e:
+    #         print(f"   ❌ Error adding return flight: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+        
+    #     if added:
+    #         print(f"   🎉 Return journey successfully added!")
+        
+    #     return itinerary
+
+
+    # def _create_mock_return_flight(self, origin_code: str, destination_code: str, 
+    #                             date: str, origin_city: str = None, 
+    #                             destination_city: str = None):
+    #     """
+    #     Create a realistic mock return flight
+        
+    #     Args:
+    #         origin_code: Airport code departing from (e.g., 'CDG')
+    #         destination_code: Airport code arriving at (e.g., 'BLR')
+    #         date: Departure date (YYYY-MM-DD)
+    #         origin_city: Origin city name
+    #         destination_city: Destination city name
+    #     """
+        
+    #     # Airlines operating international routes
+    #     carriers = [
+    #         ('AI', 'Air India'),
+    #         ('6E', 'IndiGo'),
+    #         ('UK', 'Vistara'),
+    #         ('EK', 'Emirates'),
+    #         ('QR', 'Qatar Airways'),
+    #         ('SQ', 'Singapore Airlines'),
+    #         ('LH', 'Lufthansa'),
+    #         ('BA', 'British Airways')
+    #     ]
+        
+    #     carrier_code, carrier_name = random.choice(carriers)
+        
+    #     # Generate realistic departure/arrival times
+    #     try:
+    #         dep_dt = datetime.strptime(date, '%Y-%m-%d')
+            
+    #         # Morning/afternoon departure (6am - 4pm)
+    #         dep_hour = random.randint(6, 16)
+    #         dep_minute = random.choice([0, 15, 30, 45])
+    #         dep_time = dep_dt.replace(hour=dep_hour, minute=dep_minute)
+            
+    #         # Flight duration varies by route (3-12 hours for international)
+    #         duration_hours = random.randint(6, 12)
+    #         duration_minutes = random.randint(0, 59)
+    #         total_duration_mins = duration_hours * 60 + duration_minutes
+            
+    #         arr_time = dep_time + timedelta(minutes=total_duration_mins)
+            
+    #         dep_time_str = dep_time.isoformat()
+    #         arr_time_str = arr_time.isoformat()
+            
+    #     except Exception as e:
+    #         print(f"      ⚠️ Date error: {e}")
+    #         dep_time_str = f"{date}T10:00:00"
+    #         arr_time_str = f"{date}T18:00:00"
+    #         total_duration_mins = 480
+        
+    #     # Realistic pricing (return flights often slightly cheaper than one-way)
+    #     # International: 25k-50k INR
+    #     # Domestic: 3k-10k INR
+    #     is_international = origin_code != destination_code[:2]
+        
+    #     if is_international:
+    #         base_price = random.uniform(28000, 48000)
+    #     else:
+    #         base_price = random.uniform(3000, 10000)
+        
+    #     price = round(base_price, 2)
+        
+    #     # Create return flight object matching FlightOption structure
+    #     @dataclass
+    #     class ReturnFlight:
+    #         flight_id: str
+    #         origin: str
+    #         destination: str
+    #         departure_time: str
+    #         arrival_time: str
+    #         duration_minutes: int
+    #         price: float
+    #         currency: str
+    #         carrier: str
+    #         segments: int
+    #         class_type: str
+    #         reliability_score: float
+    #         available_seats: int
+    #         item_type: str
+    #         is_return: bool
+            
+    #         @property
+    #         def name(self):
+    #             """Display name for itinerary"""
+    #             return f"{self.carrier} {self.origin}-{self.destination} (Return)"
+            
+    #         @property
+    #         def duration(self):
+    #             """Duration in minutes for compatibility"""
+    #             return self.duration_minutes
+        
+    #     flight = ReturnFlight(
+    #         flight_id=f"RET{random.randint(1000, 9999)}",
+    #         origin=origin_code,
+    #         destination=destination_code,
+    #         departure_time=dep_time_str,
+    #         arrival_time=arr_time_str,
+    #         duration_minutes=total_duration_mins,
+    #         price=price,
+    #         currency='INR',
+    #         carrier=carrier_code,
+    #         segments=random.randint(1, 2),
+    #         class_type='economy',
+    #         reliability_score=random.uniform(0.85, 0.95),
+    #         available_seats=random.randint(10, 50),
+    #         item_type='flight',
+    #         is_return=True
+    #     )
+        
+    #     hrs = total_duration_mins // 60
+    #     mins = total_duration_mins % 60
+    #     print(f"   📝 Generated: {carrier_code} {origin_code}→{destination_code} | "
+    #         f"{hrs}h {mins}m | INR {price:,.2f}")
+        
+    #     return flight
+
+
+    # ============================================================================
+    # OPTIONAL: Ground Transport Return (for domestic trips)
+    # ============================================================================
+
+    def add_return_ground_transport(self, itinerary, trip_details: dict):
+        """
+        Add return ground transport (train/bus) instead of flight
+        Use this for domestic trips where ground transport is more common
+        """
+        
+        print("\n" + "="*80)
+        print("🚂 ADDING RETURN GROUND TRANSPORT")
+        print("="*80)
+        
+        origin = trip_details.get('origin_city', 'Bangalore')
+        destination = trip_details.get('destination_city', 'Mumbai')
+        departure_date = trip_details.get('departure_date', '2026-03-01')
+        num_days = trip_details.get('num_days', 7)
+        
+        # Calculate return date
+        try:
+            dep_date = datetime.strptime(departure_date, '%Y-%m-%d')
+            return_date = (dep_date + timedelta(days=num_days - 1)).strftime('%Y-%m-%d')
+        except:
+            return_date = departure_date
+        
+        print(f"   🚂 Return route: {destination} → {origin}")
+        print(f"   📅 Return date: {return_date}")
+        
+        # Create mock ground transport
+        transport_types = [
+            ('Train', 'Indian Railways', 1000, 8),
+            ('Train', 'Rajdhani Express', 1500, 6),
+            ('Bus', 'VRL Travels', 800, 10),
+            ('Bus', 'RedBus Sleeper', 900, 9)
+        ]
+        
+        transport_type, provider, base_cost, hours = random.choice(transport_types)
+        
+        @dataclass
+        class ReturnTransport:
+            transport_id: str
+            origin: str
+            destination: str
+            departure_time: str
+            duration_hours: float
+            price: float
+            currency: str
+            provider: str
+            transport_type: str
+            item_type: str
+            is_return: bool
+            
+            @property
+            def name(self):
+                return f"{self.provider} {self.origin}-{self.destination} (Return)"
+            
+            @property
+            def duration_minutes(self):
+                return int(self.duration_hours * 60)
+            
+            @property
+            def duration(self):
+                return int(self.duration_hours * 60)
+        
+        transport = ReturnTransport(
+            transport_id=f"GT_RET_{random.randint(1000, 9999)}",
+            origin=destination,
+            destination=origin,
+            departure_time=f"{return_date}T20:00:00",  # Evening departure
+            duration_hours=hours,
+            price=round(base_cost * random.uniform(0.9, 1.1), 2),
+            currency='INR',
+            provider=provider,
+            transport_type=transport_type,
+            item_type='ground_transport',
+            is_return=True
+        )
+        
+        print(f"   ✓ Generated: {provider} ({transport_type})")
+        print(f"   💰 Cost: INR {transport.price:,.2f} | Duration: {hours}h")
+        
+        # Add to itinerary (same logic as flight)
+        try:
+            if isinstance(itinerary, dict) and 'itinerary' in itinerary:
+                last_day_idx = num_days - 1
+                
+                if last_day_idx not in itinerary['itinerary']:
+                    itinerary['itinerary'][last_day_idx] = []
+                
+                itinerary['itinerary'][last_day_idx].insert(0, transport)
+                
+                if 'total_cost' in itinerary:
+                    itinerary['total_cost'] += transport.price
+                
+                print(f"   ✅ Return transport added to Day {num_days}")
+            
+            elif hasattr(itinerary, 'daily_schedules') and itinerary.daily_schedules:
+                last_day_schedule = itinerary.daily_schedules[-1]
+                if not hasattr(last_day_schedule, 'items'):
+                    last_day_schedule.items = []
+                last_day_schedule.items.insert(0, transport)
+                print(f"   ✅ Return transport added!")
+        
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+        
+        return itinerary
+
+
+    """"
+
+    2. In your generate_itinerary() method, add this AFTER optimization:
+
+    # Run optimizer
+    result = optimizer.optimize_itinerary(...)
+    
+    # ADD RETURN JOURNEY
+    result = self.add_return_journey(result, trip_details)
+    
+    # Display
+    self.display_itinerary_with_transport(result, trip_details)
+
+    3. For ground transport returns (trains/buses), use:
+    result = self.add_return_ground_transport(result, trip_details)
+
+    Done! Return journey will now appear on the last day.
+    """
 
     def display_itinerary_with_transport(self, itinerary, trip_details: dict):
         """Display itinerary with transport - works with dict format"""

@@ -170,6 +170,11 @@ class ItineraryEnhancer:
         # Get item type
         item_type = self._get_item_type(item)
         
+        # Get time from properties dict first (for OptionCandidate items)
+        time_str = ""
+        if hasattr(item, 'properties') and isinstance(item.properties, dict):
+            time_str = item.properties.get('scheduled_time', '')
+        
         # Get duration
         duration = 0
         if hasattr(item, 'duration_minutes'):

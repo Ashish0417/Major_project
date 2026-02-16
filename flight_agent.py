@@ -13,6 +13,8 @@ import re
 
 load_dotenv()
 
+AMADEUS_MAX_DAYS_AHEAD = 335   # ~11 months; adjust if needed
+
 
 @dataclass
 class FlightOption:
@@ -100,33 +102,80 @@ class FlightAgent:
             print(f"  ❌ Authentication Error: {e}")
             return False
 
+    # def search_flights(self, origin: str, destination: str, departure_date: str,
+    #                   adults: int = 1, travel_class: str = "ECONOMY",
+    #                   max_results: int = 5) -> List[FlightOption]:
+    #     """Search flights using TEST API"""
+
+    #     if not self.use_real_api or not self.access_token:
+    #         print(f"  ⚠️  Real API not available. Using mock data.")
+    #         return self._mock_flight_search(origin, destination, departure_date,
+    #                                       travel_class, max_results)
+
+    #     return self._real_flight_search(origin, destination, departure_date,
+    #                                    adults, travel_class, max_results)
+    # Maximum days ahead the Amadeus TEST API reliably accepts
+
     def search_flights(self, origin: str, destination: str, departure_date: str,
-                      adults: int = 1, travel_class: str = "ECONOMY",
-                      max_results: int = 5) -> List[FlightOption]:
-        """Search flights using TEST API"""
+                    adults: int = 1, travel_class: str = "ECONOMY",
+                    max_results: int = 5) -> List:
+        """
+        Search flights — with date validation for Amadeus TEST API.
 
+        If the requested date is beyond AMADEUS_MAX_DAYS_AHEAD from today,
+        the TEST API will silently fail (code 141).  We clamp the date to the
+        maximum valid date for the API call so we get real test data when
+        possible, or fall through to mock gracefully.
+        """
+
+        # ── validate / clamp date ─────────────────────────────────────────────
+        try:
+            req_date = datetime.strptime(departure_date, '%Y-%m-%d')
+            max_date = datetime.now() + timedelta(days=AMADEUS_MAX_DAYS_AHEAD)
+
+            if req_date > max_date:
+                clamped = max_date.strftime('%Y-%m-%d')
+                print(f"  ℹ️  Amadeus TEST API: date {departure_date} is too far ahead "
+                    f"(>{AMADEUS_MAX_DAYS_AHEAD} days). Clamping to {clamped} for API call.")
+                api_date = clamped
+            else:
+                api_date = departure_date
+
+        except ValueError:
+            print(f"  ⚠️  Invalid date format '{departure_date}', using today+30")
+            api_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+
+        # ── dispatch ──────────────────────────────────────────────────────────
         if not self.use_real_api or not self.access_token:
-            print(f"  ⚠️  Real API not available. Using mock data.")
-            return self._mock_flight_search(origin, destination, departure_date,
-                                          travel_class, max_results)
+            print(f"  ⚠️  Real API not available → mock data")
+            return self._mock_flight_search(
+                origin, destination, departure_date,   # original date in mock
+                travel_class, max_results
+            )
 
-        return self._real_flight_search(origin, destination, departure_date,
-                                       adults, travel_class, max_results)
+        return self._real_flight_search(
+            origin, destination, api_date,             # clamped date to API
+            adults, travel_class, max_results
+        )
 
     def _real_flight_search(self, origin, destination, departure_date,
-                           adults, travel_class, max_results) -> List[FlightOption]:
-        """CORRECTED: Real flight search using TEST API endpoint"""
-        try:
-            # EXACT FORMAT from user's example
-            headers = {
-                "Authorization": f"Bearer {self.access_token}"
-            }
+                        adults, travel_class, max_results) -> List:
+        """
+        Call Amadeus TEST API and fall back to mock data on any failure.
 
-            params = {
-                "originLocationCode": origin.upper(),
+        Failure modes handled:
+        - 400 / code 141  → route not in test dataset
+        - 401             → token expired (re-authenticates once, then mock)
+        - 500 / timeout   → service unavailable
+        - Empty data[]    → no flights for this route/date
+        """
+        try:
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            params  = {
+                "originLocationCode":      origin.upper(),
                 "destinationLocationCode": destination.upper(),
-                "departureDate": departure_date,
-                "adults": adults
+                "departureDate":           departure_date,
+                "adults":                  adults,
             }
 
             print(f"\n  🔍 Searching flights (TEST API)...")
@@ -134,70 +183,199 @@ class FlightAgent:
             print(f"  From: {origin} → To: {destination}")
             print(f"  Date: {departure_date}")
 
-            response = requests.get(self.base_url, headers=headers, params=params, timeout=15)
+            response = requests.get(
+                self.base_url, headers=headers, params=params, timeout=15
+            )
 
             print(f"  Status: {response.status_code}")
 
+            # ── 401 → try once to re-authenticate ────────────────────────────
             if response.status_code == 401:
-                print(f"  ❌ Token expired - re-authenticating...")
-                self._authenticate()
-                return []
+                print(f"  ❌ Token expired — re-authenticating...")
+                if self._authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.get(
+                        self.base_url, headers=headers, params=params, timeout=15
+                    )
+                else:
+                    print(f"  ⚠️  Re-auth failed → using mock data")
+                    return self._mock_flight_search(
+                        origin, destination, departure_date, travel_class, max_results
+                    )
 
+            # ── Non-200 → log clearly and fall back to mock ──────────────────
             if response.status_code != 200:
-                print(f"  ⚠️  API Error {response.status_code}")
                 try:
-                    print(f"  Response: {response.json()}")
-                except:
-                    print(f"  Response: {response.text[:200]}")
-                return []
+                    body   = response.json()
+                    errors = body.get('errors', [])
+                    if errors:
+                        code  = errors[0].get('code', '?')
+                        title = errors[0].get('title', 'Unknown error')
+                        print(f"  ⚠️  Amadeus error {response.status_code} "
+                            f"[code {code}]: {title}")
+                        if code == 141:
+                            print(f"  ℹ️  Code 141 = route '{origin}→{destination}' "
+                                f"on {departure_date} has no data in the TEST environment")
+                            print(f"  ℹ️  This is a TEST API limitation, not a code bug")
+                    else:
+                        print(f"  ⚠️  API error {response.status_code}: {body}")
+                except Exception:
+                    print(f"  ⚠️  API error {response.status_code}: {response.text[:120]}")
 
+                print(f"  🔄 Falling back to mock flight data...")
+                return self._mock_flight_search(
+                    origin, destination, departure_date, travel_class, max_results
+                )
+
+            # ── 200 but empty data[] → fall back to mock ─────────────────────
             data = response.json()
+            if not data.get('data'):
+                print(f"  ⚠️  API returned 200 but no flights for this route/date")
+                print(f"  🔄 Falling back to mock flight data...")
+                return self._mock_flight_search(
+                    origin, destination, departure_date, travel_class, max_results
+                )
+
+            # ── Parse real results ────────────────────────────────────────────
             flights = []
+            print(f"  Found {len(data['data'])} flights in response")
 
-            if 'data' in data and data['data']:
-                print(f"  Found {len(data['data'])} flights in response")
+            for i, offer in enumerate(data['data'][:max_results]):
+                try:
+                    itinerary = offer['itineraries'][0]
+                    segment   = itinerary['segments'][0]
+                    price     = float(offer['price']['total'])
+                    currency  = offer['price'].get('currency', 'USD')
 
-                for i, offer in enumerate(data['data'][:max_results]):
-                    try:
-                        itinerary = offer['itineraries'][0]
-                        segment = itinerary['segments'][0]
+                    from flight_agent import FlightOption
+                    flight = FlightOption(
+                        flight_id=f"FL{i+1}",
+                        origin=origin.upper(),
+                        destination=destination.upper(),
+                        departure_time=segment['departure']['at'],
+                        arrival_time=segment['arrival']['at'],
+                        duration_minutes=self._parse_duration(itinerary['duration']),
+                        price=price,
+                        currency=currency,
+                        carrier=segment.get('carrierCode', 'XX'),
+                        segments=len(itinerary['segments']),
+                        class_type=travel_class.lower()
+                    )
+                    flights.append(flight)
+                    print(f"    ✓ Flight {i+1}: {flight.carrier} "
+                        f"{flight.currency} {flight.price}")
 
-                        price = float(offer['price']['total'])
-                        currency = offer['price'].get('currency', 'USD')
+                except Exception as e:
+                    print(f"    ⚠️  Parse error flight {i+1}: {e}")
+                    continue
 
-                        flight = FlightOption(
-                            flight_id=f"FL{i+1}",
-                            origin=origin.upper(),
-                            destination=destination.upper(),
-                            departure_time=segment['departure']['at'],
-                            arrival_time=segment['arrival']['at'],
-                            duration_minutes=self._parse_duration(itinerary['duration']),
-                            price=price,
-                            currency=currency,
-                            carrier=segment.get('carrierCode', 'XX'),
-                            segments=len(itinerary['segments']),
-                            class_type=travel_class.lower()
-                        )
-                        flights.append(flight)
+            print(f"  ✅ Parsed {len(flights)} real flights")
 
-                        print(f"    ✓ Flight {i+1}: {flight.carrier} {flight.currency} {flight.price}")
-
-                    except Exception as e:
-                        print(f"    ⚠️  Error parsing flight: {e}")
-                        continue
-
-                print(f"  ✅ Successfully parsed {len(flights)} flights")
-            else:
-                print(f"  ⚠️  No flights found in response")
-                print(f"  Raw response: {data}")
+            # If parsing produced nothing, still fall back
+            if not flights:
+                print(f"  🔄 No usable flights parsed → mock fallback")
+                return self._mock_flight_search(
+                    origin, destination, departure_date, travel_class, max_results
+                )
 
             return flights
 
+        except requests.Timeout:
+            print(f"  ❌ Request timed out → mock fallback")
+            return self._mock_flight_search(
+                origin, destination, departure_date, travel_class, max_results
+            )
         except Exception as e:
-            print(f"  ❌ Flight search error: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+            print(f"  ❌ Unexpected error: {type(e).__name__}: {e}")
+            return self._mock_flight_search(
+                origin, destination, departure_date, travel_class, max_results
+            )
+    
+    # def _real_flight_search(self, origin, destination, departure_date,
+    #                        adults, travel_class, max_results) -> List[FlightOption]:
+    #     """CORRECTED: Real flight search using TEST API endpoint"""
+    #     try:
+    #         # EXACT FORMAT from user's example
+    #         headers = {
+    #             "Authorization": f"Bearer {self.access_token}"
+    #         }
+
+    #         params = {
+    #             "originLocationCode": origin.upper(),
+    #             "destinationLocationCode": destination.upper(),
+    #             "departureDate": departure_date,
+    #             "adults": adults
+    #         }
+
+    #         print(f"\n  🔍 Searching flights (TEST API)...")
+    #         print(f"  URL: {self.base_url}")
+    #         print(f"  From: {origin} → To: {destination}")
+    #         print(f"  Date: {departure_date}")
+
+    #         response = requests.get(self.base_url, headers=headers, params=params, timeout=15)
+
+    #         print(f"  Status: {response.status_code}")
+
+    #         if response.status_code == 401:
+    #             print(f"  ❌ Token expired - re-authenticating...")
+    #             self._authenticate()
+    #             return []
+
+    #         if response.status_code != 200:
+    #             print(f"  ⚠️  API Error {response.status_code}")
+    #             try:
+    #                 print(f"  Response: {response.json()}")
+    #             except:
+    #                 print(f"  Response: {response.text[:200]}")
+    #             return []
+
+    #         data = response.json()
+    #         flights = []
+
+    #         if 'data' in data and data['data']:
+    #             print(f"  Found {len(data['data'])} flights in response")
+
+    #             for i, offer in enumerate(data['data'][:max_results]):
+    #                 try:
+    #                     itinerary = offer['itineraries'][0]
+    #                     segment = itinerary['segments'][0]
+
+    #                     price = float(offer['price']['total'])
+    #                     currency = offer['price'].get('currency', 'USD')
+
+    #                     flight = FlightOption(
+    #                         flight_id=f"FL{i+1}",
+    #                         origin=origin.upper(),
+    #                         destination=destination.upper(),
+    #                         departure_time=segment['departure']['at'],
+    #                         arrival_time=segment['arrival']['at'],
+    #                         duration_minutes=self._parse_duration(itinerary['duration']),
+    #                         price=price,
+    #                         currency=currency,
+    #                         carrier=segment.get('carrierCode', 'XX'),
+    #                         segments=len(itinerary['segments']),
+    #                         class_type=travel_class.lower()
+    #                     )
+    #                     flights.append(flight)
+
+    #                     print(f"    ✓ Flight {i+1}: {flight.carrier} {flight.currency} {flight.price}")
+
+    #                 except Exception as e:
+    #                     print(f"    ⚠️  Error parsing flight: {e}")
+    #                     continue
+
+    #             print(f"  ✅ Successfully parsed {len(flights)} flights")
+    #         else:
+    #             print(f"  ⚠️  No flights found in response")
+    #             print(f"  Raw response: {data}")
+
+    #         return flights
+
+    #     except Exception as e:
+    #         print(f"  ❌ Flight search error: {type(e).__name__}: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+    #         return []
 
     def _mock_flight_search(self, origin, destination, departure_date,
                            travel_class, max_results) -> List[FlightOption]:

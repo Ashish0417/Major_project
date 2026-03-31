@@ -177,6 +177,7 @@ class OptimizerState(TypedDict):
     # Exploration state
     candidate_plans: List[Dict[str, Any]]  # All explored plans
     evaluated_combinations: int  # Counter for combinations checked
+    total_candidates: int  # Total candidates generated
     candidates_generated: bool  # Flag to prevent infinite regeneration
     
     # Results
@@ -299,16 +300,29 @@ class ConstraintEvaluator:
     #     return score, violations
     def evaluate_plan(self, plan: ItineraryPlan) -> Tuple[float, List[str]]:
         """
-        Score a plan 0-100 based on total budget fit, quality, and activity count.
+        Score a plan 0-100 based on total budget fit, quality, activity count, and travel time.
 
-        Scoring breakdown
-        -----------------
-          60 pts  budget adherence  — primary signal
-          30 pts  average rating    — quality signal  
+        Scoring breakdown (adaptive based on budget slack)
+        -------------------------------------------------
+        TIGHT BUDGET (slack <30%):
+          60 pts  budget adherence  — primary signal (COST MATTERS)
+          20 pts  average rating    — quality signal  
           10 pts  activity count    — experience signal
+          10 pts  travel time       — speed (secondary)
 
-        No per-category caps. A cheap train + good hotel beats an expensive
-        flight + cheap hotel automatically because the total cost is lower.
+        COMFORTABLE BUDGET (slack 30-70%):
+          40 pts  budget adherence  — mix of cost + quality
+          25 pts  average rating    — quality signal  
+          10 pts  activity count    — experience signal
+          25 pts  travel time       — speed (MORE IMPORTANT when abundant budget)
+
+        ABUNDANT BUDGET (slack >70%):
+          20 pts  budget adherence  — just avoid waste
+          30 pts  average rating    — comfort matters more  
+          10 pts  activity count    — experience signal
+          40 pts  travel time       — PRIORITIZE SPEED & COMFORT with abundant budget
+
+        Key insight: With high budget, fewer hours traveling = more time enjoying destination!
         """
         violations = []
         score      = 0.0
@@ -317,26 +331,47 @@ class ConstraintEvaluator:
         total_cost = sum(costs.values())
         budget     = self.budget.total_budget
 
-        # ── 1. Budget adherence (60 pts) ───────────────────────────────────
+        # ── Calculate budget slack percentage ───────────────────────────────
+        budget_slack     = budget - total_cost
+        budget_slack_pct = (budget_slack / budget * 100) if budget > 0 else 0
+
+        # ── Determine weight distribution based on budget slack ───────────────
+        if budget_slack_pct < 30:
+            # TIGHT: Cost-driven (traditional scoring)
+            budget_weight = 60
+            rating_weight = 20
+            activity_weight = 10
+            time_weight = 10
+        elif budget_slack_pct < 70:
+            # COMFORTABLE: Balanced
+            budget_weight = 40
+            rating_weight = 25
+            activity_weight = 10
+            time_weight = 25
+        else:
+            # ABUNDANT: Experience & time driven
+            budget_weight = 20
+            rating_weight = 30
+            activity_weight = 10
+            time_weight = 40
+
+        # ── 1. Budget adherence (adaptive weight) ──────────────────────────
         if total_cost <= budget:
-            # Full 60 pts when cost = 0, scales to 30 pts when exactly on budget.
-            # This means a plan at 50% of budget scores 45, one at 100% scores 30 —
-            # cheaper combinations are always ranked higher.
+            # Scale: 0 cost = full pts, exactly at budget = 50% of budget_weight
             ratio        = total_cost / budget if budget > 0 else 0
-            budget_score = 60 * (1 - ratio * 0.5)
+            budget_score = budget_weight * (1 - ratio * 0.5)
             score       += budget_score
         else:
-            # Over budget — lose up to 60 pts proportionally.
-            # 10% over → -12 pts,  50% over → -60 pts (floored)
+            # Over budget — lose proportionally
             overage_ratio = (total_cost - budget) / budget
-            penalty       = min(60, 60 * overage_ratio * 2)
+            penalty       = min(budget_weight, budget_weight * overage_ratio * 2)
             score        -= penalty
             violations.append(
                 f"Over budget by INR {total_cost - budget:,.0f} "
                 f"({overage_ratio * 100:.0f}% over limit)"
             )
 
-        # ── 2. Quality / rating score (30 pts) ────────────────────────────
+        # ── 2. Quality / rating score (adaptive weight) ────────────────────
         rated_items = (
             ([plan.transport_option] if plan.transport_option else []) +
             plan.accommodation_options +
@@ -346,7 +381,7 @@ class ConstraintEvaluator:
 
         if rated_items:
             avg_rating    = sum(o.rating for o in rated_items) / len(rated_items)
-            score        += 30 * (avg_rating / 5.0)
+            score        += rating_weight * (avg_rating / 5.0)
 
             # Soft penalties for items below minimum thresholds
             for item in plan.accommodation_options:
@@ -365,21 +400,51 @@ class ConstraintEvaluator:
                 if item.rating < self.prefs.activity_min_rating:
                     score -= 2
 
-        # ── 3. Activity count (10 pts) ─────────────────────────────────────
+        # ── 3. Activity count (adaptive weight) ────────────────────────────
         activities_per_day = len(plan.activity_options) / max(1, plan.total_days)
 
         if (self.prefs.activities_per_day_min
                 <= activities_per_day
                 <= self.prefs.activities_per_day_max):
-            score += 10                          # full credit
+            score += activity_weight                          # full credit
         elif activities_per_day < self.prefs.activities_per_day_min:
             violations.append(
                 f"Only {activities_per_day:.1f} activities/day "
                 f"(min {self.prefs.activities_per_day_min})"
             )
-            score += 5                           # partial credit
+            score += activity_weight * 0.5                    # partial credit
 
-        # ── 4. Dietary compliance (soft check) ────────────────────────────
+        # ── 4. Travel time scoring (adaptive weight) ──────────────────────
+        # NEW: When budget is abundant, prioritize hours saved, not just cost saved
+        transport_duration = 0
+        if plan.transport_option:
+            transport_duration += plan.transport_option.duration_minutes or 0
+        if plan.return_transport_option:
+            transport_duration += plan.return_transport_option.duration_minutes or 0
+
+        if time_weight > 0 and transport_duration > 0:
+            # Normalize duration to 0-1 scale (12 hours = good, 24+ hours = bad)
+            # Assume short flights ~2h, medium trains/buses ~16-18h, long journey ~24h+
+            duration_hours = transport_duration / 60
+            
+            # Reference times: excellent=2h, acceptable=8h, poor=18h+
+            if duration_hours <= 2:
+                time_score = time_weight * 1.0        # Full score for flights
+            elif duration_hours <= 8:
+                time_score = time_weight * 0.8        # Good: trains/long flights
+            elif duration_hours <= 16:
+                time_score = time_weight * 0.4        # ~16h bus: significant penalty
+            else:
+                time_score = time_weight * 0.1        # 24h+: minimal score
+            
+            score += time_score
+            
+            # BONUS for abundant budget + fast travel
+            if budget_slack_pct > 70 and duration_hours < 4:
+                bonus_pts = min(10, time_weight * 0.25)  # Extra 0-10 pts for prioritizing speed
+                score += bonus_pts
+
+        # ── 5. Dietary compliance (soft check) ────────────────────────────
         if self.prefs.dietary_restrictions:
             non_compliant = [
                 o for o in plan.restaurant_options
@@ -483,6 +548,7 @@ class LangGraphItineraryOptimizer:
         
         state['candidate_plans'] = []
         state['evaluated_combinations'] = 0
+        state['total_candidates'] = 0  # Track total candidates generated
         state['best_score'] = -1.0
         state['backtrack_count'] = 0
         state['candidates_generated'] = False
@@ -576,16 +642,14 @@ class LangGraphItineraryOptimizer:
                              if state['activity_options'] else [None])
 
         new_candidates = []
-        max_combinations = 200   # more room since we have extra dimension
+        # Generate ALL combinations (no hardcoded limit)
+        # The optimizer will evaluate all later
 
         for transport in transports:
             for ret_transport in return_transports:
                 for hotel in hotels:
                     for restaurant in restaurants:
                         for activity in activities:
-                            if len(new_candidates) >= max_combinations:
-                                break
-
                             plan = ItineraryPlan(
                                 transport_option=(
                                     self._dict_to_candidate(transport)
@@ -614,6 +678,7 @@ class LangGraphItineraryOptimizer:
                     f"(outbound × return × hotel × food × activity)")
 
         state['candidate_plans']      = [p.__dict__ for p in new_candidates]
+        state['total_candidates']     = len(new_candidates)  # Store total count for limit checking
         state['candidates_generated'] = True
         return state
 
@@ -663,6 +728,17 @@ class LangGraphItineraryOptimizer:
         plan.satisfaction_score = score
         plan.constraint_violations = violations
         
+        # Debug logging: show transport choice and time
+        transport_name = plan.transport_option.name if plan.transport_option else "None"
+        transport_duration = (plan.transport_option.duration_minutes or 0) + \
+                           (plan.return_transport_option.duration_minutes or 0 if plan.return_transport_option else 0)
+        transport_cost = (plan.transport_option.cost or 0) + \
+                        (plan.return_transport_option.cost or 0 if plan.return_transport_option else 0)
+        total_cost = sum(plan.calculate_costs().values())
+        budget_slack_pct = ((self.budget.total_budget - total_cost) / self.budget.total_budget * 100) if self.budget.total_budget > 0 else 0
+        
+        logger.debug(f"Plan: {transport_name} | {transport_duration//60}h | Cost: INR {total_cost:.0f} | Budget slack: {budget_slack_pct:.0f}% | Score: {score:.1f}")
+        
         state['evaluated_combinations'] += 1
         
         logger.info(f"Evaluated plan: score={score:.1f}, violations={len(violations)}")
@@ -679,7 +755,7 @@ class LangGraphItineraryOptimizer:
                 'score':            score,
                 'violations':       violations
             }
-            logger.info(f"New best plan found: score={score:.1f}")
+            logger.info(f"🏆 New best plan: {transport_name} | {transport_duration//60}h | INR {total_cost:.0f} | Score={score:.1f}")
         
         return state
     
@@ -693,20 +769,22 @@ class LangGraphItineraryOptimizer:
     
     def _should_continue_exploring(self, state: OptimizerState) -> str:
         """Decide whether to continue exploring or finalize"""
-        # Stop after evaluating enough candidates (don't try all 50)
-        max_evaluations = 15  # Stop after evaluating 15 plans
+        # Evaluate ALL candidates (no hardcoded limit)
+        max_evaluations = state.get('total_candidates', 0)
         
         if state['evaluated_combinations'] >= max_evaluations:
-            logger.info(f"Reached evaluation limit ({max_evaluations}), finalizing...")
+            logger.info(f"Finished evaluating all {max_evaluations} candidates, finalizing...")
             return "finalize"
         
         # Continue if we still have candidates
         if state['candidate_plans'] and len(state['candidate_plans']) > 0:
-            logger.info(f"Still have {len(state['candidate_plans'])} candidates to evaluate, continuing...")
+            remaining = len(state['candidate_plans'])
+            logger.info(f"Evaluated {state['evaluated_combinations']}/{max_evaluations}, "
+                       f"still have {remaining} candidates to evaluate, continuing...")
             return "continue"
         
         # Stop when no more candidates
-        logger.info(f"No more candidates to evaluate ({state['evaluated_combinations']} evaluated), finalizing...")
+        logger.info(f"No more candidates to evaluate ({state['evaluated_combinations']} total evaluated), finalizing...")
         return "finalize"
     
     def _backtrack(self, state: OptimizerState) -> OptimizerState:
@@ -762,6 +840,7 @@ class LangGraphItineraryOptimizer:
             'activity_options': activity_options,
             'candidate_plans': [],
             'evaluated_combinations': 0,
+            'total_candidates': 0,  # Will be set by _generate_candidates
             'candidates_generated': False,
             'best_plan': None,
             'best_score': -1.0,
@@ -773,7 +852,7 @@ class LangGraphItineraryOptimizer:
         runnable = self.graph.compile()
         final_state = runnable.invoke(
             initial_state,
-            config={"recursion_limit": 500}  # Increased from 100 to handle looping through candidates
+            config={"recursion_limit": 2000}  # Increased to handle all (625+) combinations
         )
         
         return {

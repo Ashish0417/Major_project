@@ -41,7 +41,7 @@ try:
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
-    print("⚠️  LangGraph not available - using OR-Tools only")
+    print(" LangGraph not available - using OR-Tools only")
 
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -72,18 +72,18 @@ class TravelItineraryOrchestrator:
         api_key = os.getenv("GOOGLE_API_KEY")
         
         if not api_key:
-            print("❌ GOOGLE_API_KEY not found in .env")
+            print("GOOGLE_API_KEY not found in .env")
             self.llm = None
             return
         
-        print("🤖 Initializing Travel Itinerary Orchestrator...")
+        print("Initializing Travel Itinerary Orchestrator...")
         
         # Show which optimizer will be used
         optimizer_name = "LangGraph (parallel + dynamic)" if self.USE_LANGGRAPH else "OR-Tools CP-SAT"
-        print(f"   📊 Optimizer: {optimizer_name}")
+        print(f" Optimizer: {optimizer_name}")
         
         if self.USE_LANGGRAPH and not LANGGRAPH_AVAILABLE:
-            print("   ⚠️  LangGraph not installed, falling back to OR-Tools")
+            print("  LangGraph not installed, falling back to OR-Tools")
             self.USE_LANGGRAPH = False
         
         # Initialize LLM for query understanding
@@ -684,83 +684,245 @@ Examples:
         4. Cycle through all agents before declaring a full round done.
         5. If still nothing after max_rounds, return None.
 
-        initial_counts: {"flight": P1, "hotel": P2, "restaurant": P3, "activity": P4}
+        initial_counts: {"flight": P1, "hotel": P2, "restaurant": P3, "activity": P4, ...}
         """
+         
+    # ── PRE-CHECK: estimate minimum possible cost ──────────────────────────
+        def _estimate_min_cost(destination, departure_date, return_date, num_days):
+            """Quick sanity check before expensive expansion loop."""
+            # Rough minimums (INR) — adjust to your data
+            MIN_TRANSPORT = 400        # cheapest bus/train one-way
+            MIN_HOTEL_PER_NIGHT = 800  # budget guesthouse
+            MIN_FOOD_PER_DAY = 300     # two basic meals
+            MIN_ACTIVITY_PER_DAY = 0   # free attractions exist
+            
+            min_total = (
+                MIN_TRANSPORT * 2                          # outbound + return
+                + MIN_HOTEL_PER_NIGHT * (num_days - 1)    # nights
+                + MIN_FOOD_PER_DAY * num_days
+                + MIN_ACTIVITY_PER_DAY * num_days
+            )
+            return min_total
+
+        min_possible = _estimate_min_cost(destination, departure_date, return_date, num_days)
+        if min_possible > budget:
+            print(f"   ❌ Budget INR {budget:,.0f} is below estimated minimum "
+                f"INR {min_possible:,.0f} for this trip. "
+                f"Please increase your budget.")
+            return {"error": "budget_too_low", "min_required": min_possible}
+        
         if initial_counts is None:
-            initial_counts = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25}
+            initial_counts = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+        else:
+            # Ensure all required keys exist (add defaults if missing)
+            defaults = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+            for key, value in defaults.items():
+                if key not in initial_counts:
+                    initial_counts[key] = value
 
         # ── agent order defines the expansion sequence ────────────────────
-        agent_order = ["flight", "hotel", "restaurant", "activity"]
+        # NOW INCLUDES ground_transport!
+        agent_order = ["flight", "ground_transport", "hotel", "restaurant", "activity"]
 
         # current max-results per agent (grows by DELTA on each expansion)
         limits = dict(initial_counts)
 
+        # ✅ Initialize cache for reuse across rounds (FIX 4: avoid re-fetching all agents)
+        cached = {}
+
+        # ── ROUND 0: Try with initial counts BEFORE expanding ──────────────
+        print(f"\n   🔄 Round 0 (initial search): trying with limits={limits}")
+        
+        flights = self.flight_agent.search_flights(
+            origin=origin_code,
+            destination=dest_code,
+            departure_date=departure_date,
+            max_results=limits["flight"],
+        )
+
+        hotels = self.hotel_agent.search_accommodations(
+            destination=destination,
+            check_in=departure_date,
+            check_out=return_date,
+            max_results=limits["hotel"],
+        )
+
+        restaurants = self.restaurant_agent.search_restaurants(
+            location=destination,
+            dietary_restrictions=dietary or None,
+            max_results=limits["restaurant"],
+        )
+
+        activities = self.activity_agent.search_activities(
+            location=destination,
+            interests=interests or None,
+            max_results=limits["activity"],
+        )
+
+        # ── Currency conversion ────────────────────────────────────────────
+        base = "INR"
+        for f in flights:
+            f.price = self.currency_converter.convert(f.price, f.currency, base)
+            f.currency = base
+        for h in hotels:
+            h.price_per_night = self.currency_converter.convert(h.price_per_night, h.currency, base)
+            h.currency = base
+        for r in restaurants:
+            r.average_meal_cost = self.currency_converter.convert(r.average_meal_cost, r.currency, base)
+            r.currency = base
+        for a in activities:
+            if hasattr(a, "price"):
+                a.price = self.currency_converter.convert(a.price, a.currency, base)
+                a.currency = base
+
+        # Ground transport
+        distance_km = self.ground_transport_agent.calculate_distance(
+            trip_details.get("origin_city", ""), destination)
+        ground = []
+        if distance_km <= 1000:
+            ground = self.ground_transport_agent.search_transport(
+                origin=trip_details.get("origin_city", ""),
+                destination=destination,
+                transport_types=["taxi", "train", "bus"],
+                max_results=limits["ground_transport"],
+            )
+        # transport_all = flights + ground
+        transport_all = sorted(
+            flights + ground,
+            key=lambda t: getattr(t, 'price', float('inf'))
+        )
+
+        # ✅ Cache Round 0 results for reuse in expansion rounds
+        cached["flight"] = flights
+        cached["hotel"] = hotels
+        cached["restaurant"] = restaurants
+        cached["activity"] = activities
+        cached["ground_transport"] = ground
+
+        # ── Try to optimize with initial counts ────────────────────────────
+        result = self._optimize_with_langgraph(
+            transport_all, hotels, restaurants, activities,
+            num_days, budget, user_profile, trip_details,
+        ) if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE else \
+            self._optimize_with_ortools(
+                transport_all, hotels, restaurants, activities,
+                num_days, user_profile,
+            )
+
+        is_feasible = (
+            "error" not in result
+            and result.get("total_cost", float("inf")) <= budget
+        )
+
+        if is_feasible:
+            print(f"   ✅ Round 0: feasible plan found with initial search!")
+            return result
+
+        print(f"   ❌ Round 0 not feasible (cost={result.get('total_cost', '?'):.0f} > budget={budget:.0f})")
+        print(f"   🔄 Starting expansion rounds...\n")
+
+        # ── ROUNDS 1+: Expand agent by agent ───────────────────────────────
+        # ✅ FIX 4: Use cache, only re-fetch the expanding agent
+        best_plan_overall = result  # Track best plan even if not feasible
+        best_cost_overall = result.get('total_cost', float('inf'))
+        
         for round_num in range(max_rounds):
             for agent_idx, expanding_agent in enumerate(agent_order):
 
-                # ── 1. Fetch options for all agents with current limits ────
-                print(f"\n   🔄 Round {round_num+1}, expanding '{expanding_agent}' "
+                print(f"   🔄 Round {round_num+1}, expanding '{expanding_agent}' "
                     f"(limits={limits})")
 
-                flights = self.flight_agent.search_flights(
-                    origin=origin_code,
-                    destination=dest_code,
-                    departure_date=departure_date,
-                    max_results=limits["flight"],
-                )
-
-                hotels = self.hotel_agent.search_accommodations(
-                    destination=destination,
-                    check_in=departure_date,
-                    check_out=return_date,
-                    max_results=limits["hotel"],
-                )
-
-                restaurants = self.restaurant_agent.search_restaurants(
-                    location=destination,
-                    dietary_restrictions=dietary or None,
-                    max_results=limits["restaurant"],
-                )
-
-                activities = self.activity_agent.search_activities(
-                    location=destination,
-                    interests=interests or None,
-                    max_results=limits["activity"],
-                )
-
-                # ── 2. Currency conversion (in-place, same as existing code) ──
-                base = "INR"
-                for f in flights:
-                    f.price = self.currency_converter.convert(f.price, f.currency, base)
-                    f.currency = base
-                for h in hotels:
-                    h.price_per_night = self.currency_converter.convert(
-                        h.price_per_night, h.currency, base)
-                    h.currency = base
-                for r in restaurants:
-                    r.average_meal_cost = self.currency_converter.convert(
-                        r.average_meal_cost, r.currency, base)
-                    r.currency = base
-                for a in activities:
-                    if hasattr(a, "price"):
-                        a.price = self.currency_converter.convert(
-                            a.price, a.currency, base)
-                        a.currency = base
-
-                # ground transport (same logic as existing generate_itinerary)
-                distance_km = self.ground_transport_agent.calculate_distance(
-                    trip_details.get("origin_city", ""), destination)
-                ground = []
-                if distance_km <= 1000:
-                    ground = self.ground_transport_agent.search_transport(
-                        origin=trip_details.get("origin_city", ""),
-                        destination=destination,
-                        transport_types=["taxi", "train", "bus"],
-                        max_results=6,
+                # ── 1. CACHE-AWARE FETCH: Only re-fetch the expanding agent ────
+                # All other agents use cached results from previous round
+                
+                # Re-fetch flight (might have more options now)
+                if expanding_agent == "flight":
+                    flights = self.flight_agent.search_flights(
+                        origin=origin_code,
+                        destination=dest_code,
+                        departure_date=departure_date,
+                        max_results=limits["flight"],
                     )
-                transport_all = flights + ground
+                    base = "INR"
+                    for f in flights:
+                        f.price = self.currency_converter.convert(f.price, f.currency, base)
+                        f.currency = base
+                    cached["flight"] = flights
+                else:
+                    flights = cached.get("flight", [])
 
-                # ── 3. Try to optimise ─────────────────────────────────────
+                # Re-fetch hotel if expanding
+                if expanding_agent == "hotel":
+                    hotels = self.hotel_agent.search_accommodations(
+                        destination=destination,
+                        check_in=departure_date,
+                        check_out=return_date,
+                        max_results=limits["hotel"],
+                    )
+                    base = "INR"
+                    for h in hotels:
+                        h.price_per_night = self.currency_converter.convert(
+                            h.price_per_night, h.currency, base)
+                        h.currency = base
+                    cached["hotel"] = hotels
+                else:
+                    hotels = cached.get("hotel", [])
+
+                # Re-fetch restaurant if expanding
+                if expanding_agent == "restaurant":
+                    restaurants = self.restaurant_agent.search_restaurants(
+                        location=destination,
+                        dietary_restrictions=dietary or None,
+                        max_results=limits["restaurant"],
+                    )
+                    base = "INR"
+                    for r in restaurants:
+                        r.average_meal_cost = self.currency_converter.convert(
+                            r.average_meal_cost, r.currency, base)
+                        r.currency = base
+                    cached["restaurant"] = restaurants
+                else:
+                    restaurants = cached.get("restaurant", [])
+
+                # Re-fetch activity if expanding
+                if expanding_agent == "activity":
+                    activities = self.activity_agent.search_activities(
+                        location=destination,
+                        interests=interests or None,
+                        max_results=limits["activity"],
+                    )
+                    base = "INR"
+                    for a in activities:
+                        if hasattr(a, "price"):
+                            a.price = self.currency_converter.convert(
+                                a.price, a.currency, base)
+                            a.currency = base
+                    cached["activity"] = activities
+                else:
+                    activities = cached.get("activity", [])
+
+                # Re-fetch ground_transport if expanding
+                if expanding_agent == "ground_transport":
+                    distance_km = self.ground_transport_agent.calculate_distance(
+                        trip_details.get("origin_city", ""), destination)
+                    ground = []
+                    if distance_km <= 1000:
+                        ground = self.ground_transport_agent.search_transport(
+                            origin=trip_details.get("origin_city", ""),
+                            destination=destination,
+                            transport_types=["taxi", "train", "bus"],
+                            max_results=limits["ground_transport"],
+                        )
+                    cached["ground_transport"] = ground
+                else:
+                    ground = cached.get("ground_transport", [])
+
+                transport_all = sorted(
+                    flights + ground,
+                    key=lambda t: getattr(t, 'price', float('inf'))
+                )
+
+                # ── 2. Try to optimise with cached + freshly-fetched options ────
                 result = self._optimize_with_langgraph(
                     transport_all, hotels, restaurants, activities,
                     num_days, budget, user_profile, trip_details,
@@ -770,36 +932,49 @@ Examples:
                         num_days, user_profile,
                     )
 
-                # ── 4. Feasibility check ───────────────────────────────────
-                # A plan is "feasible" when the optimiser succeeded AND
-                # total cost is within budget.
+                # ── 3. Feasibility check ───────────────────────────────────
                 is_feasible = (
                     "error" not in result
                     and result.get("total_cost", float("inf")) <= budget
                 )
+                
+                current_cost = result.get('total_cost', float('inf'))
+                
+                # Track best plan (even if not feasible)
+                if current_cost < best_cost_overall:
+                    best_plan_overall = result
+                    best_cost_overall = current_cost
+                    print(f"   💰 New best cost: {current_cost:.0f} INR")
 
                 if is_feasible:
                     print(f"   ✅ Sub-method 1: feasible plan found "
                         f"(round {round_num+1}, agent '{expanding_agent}')")
                     return result
 
-                print(f"   ↳ Not feasible "
-                    f"(cost={result.get('total_cost', '?'):.0f} > budget={budget:.0f}), "
+                print(f"   ⚠️  Cost: {current_cost:.0f} > Budget: {budget:.0f}, "
                     f"expanding next agent…")
 
-                # ── 5. Expand the *next* agent for the following iteration ──
-                next_agent = agent_order[(agent_idx + 1) % len(agent_order)]
-                limits[next_agent] += self.DELTA
+                # ── 4. Expand the current agent for next iteration ──
+                limits[expanding_agent] += self.DELTA
 
             # after cycling all agents, bump every limit by δ before next round
-            print(f"   ⚠️  Round {round_num+1} exhausted all agents — "
-                f"increasing all limits by {self.DELTA} for round {round_num+2}")
+            print(f"   ⚠️  Round {round_num+1} done — increasing all limits by {self.DELTA}")
             for key in limits:
                 limits[key] += self.DELTA
 
         print("   ❌ Sub-method 1: no feasible plan after "
-            f"{max_rounds} rounds. Returning best effort.")
-        return None   # caller decides what to do (fall back, show error, etc.)
+            f"{max_rounds} rounds")
+        print(f"   💡 Best effort cost: INR {best_cost_overall:.0f} (budget: INR {budget:.0f})")
+        print(f"   📊 Shortfall: INR {best_cost_overall - budget:.0f}")
+        
+        # Return best effort if close enough (within 20% of budget)
+        if best_cost_overall <= budget * 1.2:
+            print(f"   ✓ Returning best effort (only {((best_cost_overall / budget - 1) * 100):.0f}% over)")
+            return best_plan_overall
+        
+        # Budget is impossible - suggest realistic budget
+        print(f"   💰 Suggested minimum budget: INR {best_cost_overall:.0f}")
+        return None   # caller decides what to do
 
     # ============================================================================
     # OPTIMIZER SELECTION (Feature Flag)
@@ -1746,7 +1921,21 @@ Examples:
                         if not destination and hasattr(item, 'properties'):
                             destination = item.properties.get('destination', '')
                         route = f" {origin}→{destination}" if (origin and destination) else ""
-                        print(f"      ✈️ {carrier}{route}")
+                        
+                        # Use dynamic icon based on transport type
+                        carrier_icon = self._get_item_icon(item_type, carrier)
+                        
+                        # Add transport type label
+                        transport_type = ''
+                        carrier_lower = carrier.lower()
+                        if 'train' in carrier_lower or 'railway' in carrier_lower:
+                            transport_type = ' (Train)'
+                        elif 'bus' in carrier_lower or 'public' in carrier_lower:
+                            transport_type = ' (Bus)'
+                        elif 'taxi' in carrier_lower or 'cab' in carrier_lower or 'ola' in carrier_lower or 'uber' in carrier_lower:
+                            transport_type = ' (Taxi)'
+                        
+                        print(f"      {carrier_icon} {carrier}{transport_type}{route}")
                     if hasattr(item, 'duration_minutes') and item.duration_minutes > 0:
                         hrs = item.duration_minutes // 60
                         mins = item.duration_minutes % 60
@@ -1776,16 +1965,17 @@ Examples:
         name_lower = name.lower()
         
         # Check for specific types
-        if 'transport' in item_type or 'flight' in item_type:
-            if 'train' in name_lower or 'railway' in name_lower or 'rajdhani' in name_lower:
-                return "🚂"
-            elif 'bus' in name_lower or 'vrl' in name_lower or 'redbus' in name_lower:
+        if 'transport' in item_type or 'flight' in item_type or '→' in name_lower:
+            # Ground transport detection FIRST
+            if 'train' in name_lower or 'railway' in name_lower or 'rajdhani' in name_lower or 'express' in name_lower:
+                return "🚆"
+            elif 'bus' in name_lower or 'vrl' in name_lower or 'redbus' in name_lower or 'public transport' in name_lower:
                 return "🚌"
-            elif 'taxi' in name_lower or 'uber' in name_lower or 'ola' in name_lower:
+            elif 'taxi' in name_lower or 'uber' in name_lower or 'ola' in name_lower or 'cab' in name_lower:
                 return "🚕"
             elif 'car' in name_lower:
                 return "🚗"
-            elif 'flight' in item_type or 'return' in name_lower or '→' in name_lower:
+            elif 'flight' in item_type or 'flight' in name_lower or 'air' in name_lower:
                 return "✈️"
             else:
                 return "✈️"  # Default transport to flight
@@ -1795,8 +1985,6 @@ Examples:
             return "🍽️"
         elif 'activity' in item_type or 'attraction' in item_type:
             return "🎭"
-        elif 'flight' in item_type or 'return' in name_lower:
-            return "✈️"
         else:
             # Fallback: check name for clues
             if 'hotel' in name_lower or 'hôtel' in name_lower or 'inn' in name_lower:
@@ -1805,8 +1993,12 @@ Examples:
                 return "🍽️"
             elif 'flight' in name_lower or 'air' in name_lower:
                 return "✈️"
-            elif 'train' in name_lower or 'railway' in name_lower:
-                return "🚂"
+            elif 'train' in name_lower or 'railway' in name_lower or 'express' in name_lower:
+                return "🚆"
+            elif 'bus' in name_lower or 'public transport' in name_lower:
+                return "🚌"
+            elif 'taxi' in name_lower or 'cab' in name_lower:
+                return "🚕"
             elif 'museum' in name_lower or 'palace' in name_lower or 'cathedral' in name_lower or 'tower' in name_lower or 'park' in name_lower or 'beach' in name_lower or 'garden' in name_lower:
                 return "🎭"
             else:

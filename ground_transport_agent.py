@@ -594,22 +594,31 @@ class GroundTransportAgent:
 
                 # FINAL LOGIC (your requirement)
                 if taxi_km:
-                    price = taxi_start + distance * taxi_km
+                    base_price = taxi_start + distance * taxi_km
                 else:
-                    price = taxi_start * distance
+                    base_price = taxi_start * distance
 
-                options.append(TransportOption(
-                    transport_id=f"TAXI-{origin[:3]}-{destination[:3]}",
-                    type="taxi",
-                    origin=origin,
-                    destination=destination,
-                    distance_km=distance,
-                    duration_minutes=duration,
-                    price=price,
-                    currency="INR",
-                    provider="Taxi Estimate",
-                    comfort_level="economy"
-                ))
+                # Generate 3 taxi options: economy, standard, premium
+                # This allows expansion to find cheaper/better options
+                taxi_variations = [
+                    (base_price * 0.7, "Budget", -15),      # Cheaper, slightly longer
+                    (base_price * 0.9, "Economy", 0),       # Standard
+                    (base_price * 1.2, "Premium", 15),      # Faster, more expensive
+                ]
+                
+                for multiplier, variant, time_delta in taxi_variations:
+                    options.append(TransportOption(
+                        transport_id=f"TAXI-{variant}-{origin[:3]}-{destination[:3]}",
+                        type="taxi",
+                        origin=origin,
+                        destination=destination,
+                        distance_km=distance,
+                        duration_minutes=max(duration + time_delta, duration),
+                        price=multiplier,
+                        currency="INR",
+                        provider=f"Taxi Estimate ({variant})",
+                        comfort_level=variant.lower()
+                    ))
 
             # ================= BUS / METRO =================
             elif t in ['bus', 'metro']:
@@ -620,24 +629,34 @@ class GroundTransportAgent:
                     else 25
                 )
 
-                price = base_ticket + distance * 1.1
+                base_price = base_ticket + distance * 1.1
 
-                options.append(TransportOption(
-                    transport_id=f"{t.upper()}-{origin[:3]}-{destination[:3]}",
-                    type=t,
-                    origin=origin,
-                    destination=destination,
-                    distance_km=distance,
-                    duration_minutes=duration,
-                    price=price,
-                    currency="INR",
-                    provider="Public Transport Estimate",
-                    comfort_level="economy"
-                ))
+                # Generate 3 bus options: budget, standard, express
+                # Budget = cheaper but slower, Express = faster but expensive
+                bus_variations = [
+                    (base_price * 0.6, "Budget", 60),       # Cheapest, 1h slower
+                    (base_price * 0.85, "Standard", 0),     # Normal price
+                    (base_price * 1.3, "Express", -45),     # Faster, 45min quicker
+                ]
+                
+                for multiplier, variant, time_delta in bus_variations:
+                    options.append(TransportOption(
+                        transport_id=f"BUS-{variant}-{origin[:3]}-{destination[:3]}",
+                        type=t,
+                        origin=origin,
+                        destination=destination,
+                        distance_km=distance,
+                        duration_minutes=max(duration + time_delta, duration),
+                        price=multiplier,
+                        currency="INR",
+                        provider=f"Public Transport ({variant})",
+                        comfort_level=variant.lower()
+                    ))
 
         if max_price:
             options = [o for o in options if o.price <= max_price]
 
+        # SORT BY PRICE (cheapest first)
         options.sort(key=lambda x: x.price)
         return options[:max_results]
 

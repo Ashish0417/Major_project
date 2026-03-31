@@ -200,129 +200,52 @@ class ConstraintEvaluator:
         self.prefs = preferences
         self.num_days = num_days
     
-    # def evaluate_plan(self, plan: ItineraryPlan) -> Tuple[float, List[str]]:
-    #     """
-    #     Evaluate a plan's feasibility and quality
+    
+    def _calculate_waiting_time_penalty(self, plan: ItineraryPlan) -> float:
+        """
+        Calculate penalty for waiting time between events.
+        Assumes events are distributed across days; long gaps = inefficient scheduling.
+        Returns penalty score (0-10 points deductible).
+        """
+        # Simplified: penalize if activities are sparse (large gaps between events)
+        total_activities = (
+            (1 if plan.transport_option else 0) +
+            len(plan.accommodation_options) +
+            len(plan.restaurant_options) +
+            len(plan.activity_options)
+        )
         
-    #     Returns:
-    #         (satisfaction_score, constraint_violations)
-    #         satisfaction_score: 0-100, higher is better
-    #         constraint_violations: list of violation descriptions
-    #     """
-    #     violations = []
-    #     score = 100.0
+        # Expected: at least 2-3 events per day (transport, meals, activity)
+        events_per_day = total_activities / max(1, plan.total_days)
         
-    #     # 1. Check budget constraints
-    #     costs = plan.calculate_costs()
-    #     total_cost = sum(costs.values())
-        
-    #     if total_cost > self.budget.total_budget:
-    #         violation = f"Total cost {total_cost:.0f} exceeds budget {self.budget.total_budget:.0f}"
-    #         violations.append(violation)
-    #         score -= 30
-        
-    #     # Check per-category budgets
-    #     for category in ['transport', 'accommodation', 'restaurant', 'activity']:
-    #         amount = costs.get(category, 0)
-    #         within_bounds, msg = self.budget.is_within_bounds(category, amount)
-    #         if not within_bounds:
-    #             violations.append(f"{category}: {msg}")
-    #             score -= 15
-        
-    #     # 2. Check rating constraints
-    #     if plan.transport_option and plan.transport_option.rating < 0.5:
-    #         violations.append(f"Transport rating {plan.transport_option.rating} too low")
-    #         score -= 10
-        
-    #     hotel_ratings = [o.rating for o in plan.accommodation_options]
-    #     if hotel_ratings and min(hotel_ratings) < self.prefs.hotel_min_rating:
-    #         violations.append(f"Hotel rating below {self.prefs.hotel_min_rating}")
-    #         score -= 15
-        
-    #     rest_ratings = [o.rating for o in plan.restaurant_options]
-    #     if rest_ratings and min(rest_ratings) < self.prefs.restaurant_min_rating:
-    #         violations.append(f"Restaurant rating below {self.prefs.restaurant_min_rating}")
-    #         score -= 10
-        
-    #     act_ratings = [o.rating for o in plan.activity_options]
-    #     if act_ratings and min(act_ratings) < self.prefs.activity_min_rating:
-    #         violations.append(f"Activity rating below {self.prefs.activity_min_rating}")
-    #         score -= 10
-        
-    #     # 3. Check activity distribution
-    #     activities_per_day = len(plan.activity_options) / max(1, plan.total_days)
-        
-    #     if activities_per_day < self.prefs.activities_per_day_min:
-    #         violations.append(
-    #             f"Activities per day ({activities_per_day:.1f}) below minimum {self.prefs.activities_per_day_min}"
-    #         )
-    #         score -= 10
-        
-    #     if activities_per_day > self.prefs.activities_per_day_max:
-    #         violations.append(
-    #             f"Activities per day ({activities_per_day:.1f}) exceeds maximum {self.prefs.activities_per_day_max}"
-    #         )
-    #         score -= 10
-        
-    #     # 4. Check meals per day
-    #     meals_per_day = len(plan.restaurant_options) / max(1, plan.total_days)
-    #     if abs(meals_per_day - self.prefs.meals_per_day) > 1:
-    #         violations.append(
-    #             f"Meals per day ({meals_per_day:.1f}) differs from preference {self.prefs.meals_per_day}"
-    #         )
-    #         score -= 5
-        
-    #     # 5. Check dietary restrictions
-    #     diet_compliant = all(
-    #         all(restriction not in o.properties.get('ingredients', '').lower()
-    #             for restriction in self.prefs.dietary_restrictions)
-    #         for o in plan.restaurant_options
-    #     )
-    #     if not diet_compliant:
-    #         violations.append("Some restaurants don't meet dietary restrictions")
-    #         score -= 10
-        
-    #     # 6. Score adjustments based on priority
-    #     if self.prefs.priority == "cost" and total_cost <= self.budget.total_budget:
-    #         score += 20
-    #     elif self.prefs.priority == "experience":
-    #         avg_rating = (
-    #             sum(o.rating for o in plan.accommodation_options + 
-    #                 plan.restaurant_options + plan.activity_options) /
-    #             max(1, len(plan.accommodation_options + 
-    #                 plan.restaurant_options + plan.activity_options))
-    #         )
-    #         score += avg_rating * 10
-        
-    #     # Ensure score doesn't exceed 100
-    #     score = min(100, max(0, score))
-        
-    #     return score, violations
+        # Penalty: if sparse schedule (< 2 events/day), deduct up to 5 pts
+        if events_per_day < 2:
+            return 5 * (1 - events_per_day / 2)
+        elif events_per_day > 5:
+            # Also penalize over-packed days (> 5 events) = excessive waiting/rushing
+            return 3 * (events_per_day - 5) / 5
+        return 0.0
+
     def evaluate_plan(self, plan: ItineraryPlan) -> Tuple[float, List[str]]:
         """
         Score a plan 0-100 based on total budget fit, quality, activity count, and travel time.
+        
+        **KEY CHANGE (FIX 6): STRICT BUDGET ENFORCEMENT**
+        - Plans exceeding budget receive automatic rejection: score = -1000
+        - Only feasible plans (within budget) are scored normally
+        - When budget is satisfied, time optimization becomes higher priority
 
-        Scoring breakdown (adaptive based on budget slack)
+        Scoring breakdown (when within budget):
         -------------------------------------------------
-        TIGHT BUDGET (slack <30%):
-          60 pts  budget adherence  — primary signal (COST MATTERS)
-          20 pts  average rating    — quality signal  
-          10 pts  activity count    — experience signal
-          10 pts  travel time       — speed (secondary)
+        WITHIN BUDGET (all plans now must satisfy this):
+          40 pts  budget efficiency  — reward cost-conscious choices
+          25 pts  average rating     — quality signal  
+          15 pts  travel time        — PRIORITIZED when budget constraints met
+          15 pts  activity count     — experience signal
+           5 pts  schedule tightness — minimize waiting time gaps
 
-        COMFORTABLE BUDGET (slack 30-70%):
-          40 pts  budget adherence  — mix of cost + quality
-          25 pts  average rating    — quality signal  
-          10 pts  activity count    — experience signal
-          25 pts  travel time       — speed (MORE IMPORTANT when abundant budget)
-
-        ABUNDANT BUDGET (slack >70%):
-          20 pts  budget adherence  — just avoid waste
-          30 pts  average rating    — comfort matters more  
-          10 pts  activity count    — experience signal
-          40 pts  travel time       — PRIORITIZE SPEED & COMFORT with abundant budget
-
-        Key insight: With high budget, fewer hours traveling = more time enjoying destination!
+        Key insight: Budget is now a HARD CONSTRAINT, not a soft penalty.
+        Time becomes a primary optimization target once budget is satisfied.
         """
         violations = []
         score      = 0.0
@@ -331,47 +254,34 @@ class ConstraintEvaluator:
         total_cost = sum(costs.values())
         budget     = self.budget.total_budget
 
-        # ── Calculate budget slack percentage ───────────────────────────────
-        budget_slack     = budget - total_cost
-        budget_slack_pct = (budget_slack / budget * 100) if budget > 0 else 0
-
-        # ── Determine weight distribution based on budget slack ───────────────
-        if budget_slack_pct < 30:
-            # TIGHT: Cost-driven (traditional scoring)
-            budget_weight = 60
-            rating_weight = 20
-            activity_weight = 10
-            time_weight = 10
-        elif budget_slack_pct < 70:
-            # COMFORTABLE: Balanced
-            budget_weight = 40
-            rating_weight = 25
-            activity_weight = 10
-            time_weight = 25
-        else:
-            # ABUNDANT: Experience & time driven
-            budget_weight = 20
-            rating_weight = 30
-            activity_weight = 10
-            time_weight = 40
-
-        # ── 1. Budget adherence (adaptive weight) ──────────────────────────
-        if total_cost <= budget:
-            # Scale: 0 cost = full pts, exactly at budget = 50% of budget_weight
-            ratio        = total_cost / budget if budget > 0 else 0
-            budget_score = budget_weight * (1 - ratio * 0.5)
-            score       += budget_score
-        else:
-            # Over budget — lose proportionally
-            overage_ratio = (total_cost - budget) / budget
-            penalty       = min(budget_weight, budget_weight * overage_ratio * 2)
-            score        -= penalty
+        # ── **FIX 6: HARD BUDGET CONSTRAINT** ──────────────────────────────
+        if total_cost > budget:
+            # REJECT outright — budget is non-negotiable
             violations.append(
-                f"Over budget by INR {total_cost - budget:,.0f} "
-                f"({overage_ratio * 100:.0f}% over limit)"
+                f"HARD REJECT: Over budget by INR {total_cost - budget:,.0f} "
+                f"({(total_cost - budget) / budget * 100:.1f}% over limit)"
             )
+            return -1000.0, violations  # Signal to filter this plan completely
 
-        # ── 2. Quality / rating score (adaptive weight) ────────────────────
+        # All plans reaching here satisfy budget constraint ✓
+        
+        # ── 1. Budget efficiency (within-budget bonus) ──────────────────────
+        # Reward staying well within budget (leaves room for last-minute spending)
+        budget_slack = budget - total_cost
+        budget_slack_pct = (budget_slack / budget * 100) if budget > 0 else 0
+        
+        # Efficient utilization: use 70-90% of budget
+        if 70 <= budget_slack_pct <= 30:  # Within 70-100% of budget
+            efficiency_score = 40  # Full credit: good cost optimization
+        else:
+            # Penalize if too wasteful (slack > 30%) or too tight (slack < 5%)
+            if budget_slack_pct > 30:
+                efficiency_score = 40 * (budget_slack_pct / 100)  # Partial credit if over-conservative
+            else:
+                efficiency_score = 20  # Minimal credit if too tight
+        score += efficiency_score
+
+        # ── 2. Quality / rating score (fixed weight: 25 pts) ──────────────
         rated_items = (
             ([plan.transport_option] if plan.transport_option else []) +
             plan.accommodation_options +
@@ -381,6 +291,7 @@ class ConstraintEvaluator:
 
         if rated_items:
             avg_rating    = sum(o.rating for o in rated_items) / len(rated_items)
+            rating_weight = 25
             score        += rating_weight * (avg_rating / 5.0)
 
             # Soft penalties for items below minimum thresholds
@@ -400,8 +311,9 @@ class ConstraintEvaluator:
                 if item.rating < self.prefs.activity_min_rating:
                     score -= 2
 
-        # ── 3. Activity count (adaptive weight) ────────────────────────────
+        # ── 3. Activity count (fixed weight: 15 pts) ────────────────────────
         activities_per_day = len(plan.activity_options) / max(1, plan.total_days)
+        activity_weight = 15
 
         if (self.prefs.activities_per_day_min
                 <= activities_per_day
@@ -414,17 +326,18 @@ class ConstraintEvaluator:
             )
             score += activity_weight * 0.5                    # partial credit
 
-        # ── 4. Travel time scoring (adaptive weight) ──────────────────────
-        # NEW: When budget is abundant, prioritize hours saved, not just cost saved
+        # ── 4. Travel time scoring (PRIORITIZED: 15 pts fixed) ──────────────
+        # FIX 6: Time is now a PRIMARY objective once budget is satisfied
         transport_duration = 0
         if plan.transport_option:
             transport_duration += plan.transport_option.duration_minutes or 0
         if plan.return_transport_option:
             transport_duration += plan.return_transport_option.duration_minutes or 0
 
-        if time_weight > 0 and transport_duration > 0:
-            # Normalize duration to 0-1 scale (12 hours = good, 24+ hours = bad)
-            # Assume short flights ~2h, medium trains/buses ~16-18h, long journey ~24h+
+        time_weight = 15  # Increased from adaptive 10-40 to fixed high priority
+        
+        if transport_duration > 0:
+            # Normalize duration to 0-1 scale
             duration_hours = transport_duration / 60
             
             # Reference times: excellent=2h, acceptable=8h, poor=18h+
@@ -438,13 +351,14 @@ class ConstraintEvaluator:
                 time_score = time_weight * 0.1        # 24h+: minimal score
             
             score += time_score
-            
-            # BONUS for abundant budget + fast travel
-            if budget_slack_pct > 70 and duration_hours < 4:
-                bonus_pts = min(10, time_weight * 0.25)  # Extra 0-10 pts for prioritizing speed
-                score += bonus_pts
+        else:
+            score += time_weight  # No transport = max time score (instant arrival)
 
-        # ── 5. Dietary compliance (soft check) ────────────────────────────
+        # ── 5. Schedule tightness (minimize waiting: up to 5 pts) ──────────
+        waiting_penalty = self._calculate_waiting_time_penalty(plan)
+        score -= waiting_penalty
+
+        # ── 6. Dietary compliance (soft check) ────────────────────────────
         if self.prefs.dietary_restrictions:
             non_compliant = [
                 o for o in plan.restaurant_options
@@ -460,7 +374,7 @@ class ConstraintEvaluator:
                 score -= 5 * len(non_compliant)
 
         # ── Clamp to valid range ───────────────────────────────────────────
-        score = max(-100, min(100, score))
+        score = max(0, min(100, score))  # Only valid scores (budget already hard-enforced)
 
         return score, violations
 
@@ -555,68 +469,13 @@ class LangGraphItineraryOptimizer:
         
         return state
     
-    # def _generate_candidates(self, state: OptimizerState) -> OptimizerState:
-    #     """Generate candidate plans by combining options (only once)"""
-        
-    #     # Skip if already generated
-    #     if state.get('candidates_generated', False):
-    #         logger.info("Candidates already generated, skipping...")
-    #         return state
-        
-    #     logger.info(f"Generating candidate combinations...")
-        
-    #     # return state
-    #     top_n = 5   # explore top-5 cheapest per category (up from 3)
-
-    #     def _cheapest(lst, n):
-    #         """Return n cheapest items from lst (dicts with 'cost' key)."""
-    #         return sorted(lst, key=lambda x: x.get('cost', 0))[:n]
-
-    #     transports   = _cheapest(state['transport_options'],     top_n)
-    #     hotels       = _cheapest(state['accommodation_options'], top_n)
-    #     restaurants  = (_cheapest(state['restaurant_options'],   top_n)
-    #                     if state['restaurant_options'] else [None])
-    #     activities   = (_cheapest(state['activity_options'],     top_n)
-    #                     if state['activity_options'] else [None])
-
-    #     new_candidates = []
-    #     max_combinations = 100   # increased from 50 — budget search needs breadth
-
-    #     for transport in transports:
-    #         for hotel in hotels:
-    #             for restaurant in restaurants:
-    #                 for activity in activities:
-    #                     if len(new_candidates) >= max_combinations:
-    #                         break
-
-    #                     plan = ItineraryPlan(
-    #                         transport_option=(
-    #                             self._dict_to_candidate(transport) if transport else None
-    #                         ),
-    #                         accommodation_options=(
-    #                             [self._dict_to_candidate(hotel)] if hotel else []
-    #                         ),
-    #                         restaurant_options=(
-    #                             [self._dict_to_candidate(restaurant)] if restaurant else []
-    #                         ),
-    #                         activity_options=(
-    #                             [self._dict_to_candidate(activity)] if activity else []
-    #                         ),
-    #                         total_days=self.num_days
-    #                     )
-    #                     new_candidates.append(plan)
-
-    #     logger.info(f"Generated {len(new_candidates)} candidates "
-    #                 f"(transports sorted cheapest-first)")
-
-    #     state['candidate_plans']      = [p.__dict__ for p in new_candidates]
-    #     state['candidates_generated'] = True
-    #     return state
     def _generate_candidates(self, state) -> dict:
         """
         Generate candidate plans pairing outbound + return transport.
+        **FIX 6: ONLY create candidates that fit within budget**
         Total cost = outbound + return + hotel×days + restaurants + activities.
         Cheapest combinations explored first.
+        Pre-filters combinations to ensure budget feasibility BEFORE evaluation.
         """
         if state.get('candidates_generated', False):
             return state
@@ -634,28 +493,82 @@ class LangGraphItineraryOptimizer:
         transports        = _cheapest(state['transport_options'],        top_n)
         return_transports = _cheapest(state['return_transport_options'], top_n) \
                             if state.get('return_transport_options') else [None]
+        
+        # FIX 6: Calculate remaining budget for hotels/food/activities
+        # Assume min transport cost from cheapest option
+        min_transport_cost = min(
+            (t.get('cost', 0) for t in transports), default=0
+        )
+        min_return_cost = min(
+            (t.get('cost', 0) for t in return_transports) if return_transports and return_transports[0] else [0],
+            default=0
+        )
+        min_transport_total = min_transport_cost + (min_return_cost if return_transports and return_transports[0] else 0)
+        remaining_budget = total_budget - min_transport_total
+        
+        # Budget allocation hint: ~35% hotel, ~35% food, ~30% activities
+        hotel_cap = min(remaining_budget * 0.40, total_budget * 0.50)
+        restaurant_cap = remaining_budget * 0.35
+        activity_cap = remaining_budget * 0.30
+        
         hotels            = _cheapest(state['accommodation_options'],    top_n,
-                                      cap=total_budget * 0.50)
-        restaurants       = (_cheapest(state['restaurant_options'],      top_n)
+                                      cap=hotel_cap)
+        restaurants       = (_cheapest(state['restaurant_options'],      top_n,
+                                       cap=restaurant_cap)
                              if state['restaurant_options'] else [None])
-        activities        = (_cheapest(state['activity_options'],        top_n)
+        activities        = (_cheapest(state['activity_options'],        top_n,
+                                       cap=activity_cap)
                              if state['activity_options'] else [None])
 
         new_candidates = []
-        # Generate ALL combinations (no hardcoded limit)
-        # The optimizer will evaluate all later
+        # FIX 6: Filter combinations BEFORE adding to candidates
+        # Only include plans that fit within budget
 
         for transport in transports:
             for ret_transport in return_transports:
+                transport_cost = (
+                    transport.get('cost', 0) +
+                    (ret_transport.get('cost', 0) if ret_transport else 0)
+                )
+                remaining_after_transport = total_budget - transport_cost
+                
+                # Skip if transport alone exceeds budget
+                if transport_cost > total_budget:
+                    continue
+                
                 for hotel in hotels:
+                    hotel_cost = hotel.get('cost', 0) if hotel else 0
+                    if transport_cost + hotel_cost > total_budget:
+                        continue
+                    
+                    remaining_after_hotel = total_budget - transport_cost - hotel_cost
+                    
                     for restaurant in restaurants:
+                        restaurant_cost = restaurant.get('cost', 0) if restaurant else 0
+                        if transport_cost + hotel_cost + restaurant_cost > total_budget:
+                            continue
+                        
+                        remaining_after_restaurant = (
+                            total_budget - transport_cost - hotel_cost - restaurant_cost
+                        )
+                        
                         for activity in activities:
+                            activity_cost = activity.get('cost', 0) if activity else 0
+                            total_cost = (
+                                transport_cost + hotel_cost +
+                                restaurant_cost + activity_cost
+                            )
+                            
+                            # FIX 6: Hard filter — only add if within budget
+                            if total_cost > total_budget:
+                                continue
+                            
                             plan = ItineraryPlan(
                                 transport_option=(
                                     self._dict_to_candidate(transport)
                                     if transport else None
                                 ),
-                                return_transport_option=(            # NEW field
+                                return_transport_option=(
                                     self._dict_to_candidate(ret_transport)
                                     if ret_transport else None
                                 ),
@@ -674,11 +587,11 @@ class LangGraphItineraryOptimizer:
                             )
                             new_candidates.append(plan)
 
-        logger.info(f"Generated {len(new_candidates)} candidates "
-                    f"(outbound × return × hotel × food × activity)")
+        logger.info(f"Generated {len(new_candidates)} candidates (all within budget) "
+                    f"out of potential {top_n**4} combinations")
 
         state['candidate_plans']      = [p.__dict__ for p in new_candidates]
-        state['total_candidates']     = len(new_candidates)  # Store total count for limit checking
+        state['total_candidates']     = len(new_candidates)
         state['candidates_generated'] = True
         return state
 

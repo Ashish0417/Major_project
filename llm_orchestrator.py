@@ -11,6 +11,7 @@ NEW: LangGraph optimizer for parallel exploration with dynamic constraints
 """
 
 import os
+from typing import Optional, Union
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -65,6 +66,7 @@ class TravelItineraryOrchestrator:
     # ✅ FEATURE FLAG: Set to True to use LangGraph optimizer
     # Set to False to use existing OR-Tools optimizer
     USE_LANGGRAPH = True
+    DELTA = 5   # how many extra options to fetch per expansion step
     
     def __init__(self):
         api_key = os.getenv("GOOGLE_API_KEY")
@@ -116,7 +118,7 @@ class TravelItineraryOrchestrator:
         self.conversation_history = []
         print("✅ Orchestrator ready!")
     
-    def parse_date(self, date_str: str) -> str:
+    def parse_date(self, date_str: str) -> Optional[str]:
         """Convert various date formats to YYYY-MM-DD"""
         if not date_str:
             return None
@@ -139,7 +141,7 @@ class TravelItineraryOrchestrator:
         except:
             return date_str
     
-    def get_airport_code(self, city: str) -> str:
+    def get_airport_code(self, city: str) -> Optional[str]:
         """Get airport code from city name"""
         if not city:
             return None
@@ -209,7 +211,7 @@ Examples:
             print(f"   ⚠️ Extraction error: {e}")
             return {}
     
-    def generate_itinerary(self, trip_details: dict = None, user_profile: UserProfile = None):
+    def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None):
         """Generate complete optimized day-by-day itinerary"""
         
         print("\n" + "="*80)
@@ -282,336 +284,362 @@ Examples:
             print(f"   ⚠️ Trend analysis unavailable: {str(e)[:50]}")
             trends = []
         
-        # [2/6] Search flights AND ground transport
-        print(f"\n{'='*80}")
-        print("[2/6] ✈️🚕 SEARCHING FLIGHTS & GROUND TRANSPORT")
-        print("="*80)
-        print(f"   Route: {origin_code} → {dest_code}")
-        print(f"   Outbound: {departure_date}")
+        # # [2/6] Search flights AND ground transport
+        # print(f"\n{'='*80}")
+        # print("[2/6] ✈️🚕 SEARCHING FLIGHTS & GROUND TRANSPORT")
+        # print("="*80)
+        # print(f"   Route: {origin_code} → {dest_code}")
+        # print(f"   Outbound: {departure_date}")
         
-        # Calculate distance to determine if ground transport is viable
-        distance_km = self.ground_transport_agent.calculate_distance(origin, destination)
+        # # Calculate distance to determine if ground transport is viable
+        # distance_km = self.ground_transport_agent.calculate_distance(origin, destination)
         
-        # Search for flights
-        print(f"\n   ✈️ Searching flights...")
-        flights = self.flight_agent.search_flights(
-            origin=origin_code,
-            destination=dest_code,
-            departure_date=departure_date,
-            max_results=10
-        )
+        # # Search for flights
+        # print(f"\n   ✈️ Searching flights...")
+        # flights = self.flight_agent.search_flights(
+        #     origin=origin_code,
+        #     destination=dest_code,
+        #     departure_date=departure_date,
+        #     max_results=10
+        # )
         
-        if flights:
-            print(f"   ✅ Found {len(flights)} flights")
-            cheapest_flight = min(flights, key=lambda f: self.currency_converter.convert(f.price, f.currency, 'INR'))
-            cheapest_flight_inr = self.currency_converter.convert(cheapest_flight.price, cheapest_flight.currency, 'INR')
-            print(f"   💰 Cheapest flight: INR {cheapest_flight_inr:,.0f}")
-        else:
-            print("   ⚠️ No flights found")
-            flights = []
-            cheapest_flight_inr = float('inf')
+        # if flights:
+        #     print(f"   ✅ Found {len(flights)} flights")
+        #     cheapest_flight = min(flights, key=lambda f: self.currency_converter.convert(f.price, f.currency, 'INR'))
+        #     cheapest_flight_inr = self.currency_converter.convert(cheapest_flight.price, cheapest_flight.currency, 'INR')
+        #     print(f"   💰 Cheapest flight: INR {cheapest_flight_inr:,.0f}")
+        # else:
+        #     print("   ⚠️ No flights found")
+        #     flights = []
+        #     cheapest_flight_inr = float('inf')
         
-        # Search for ground transport (if distance is reasonable)
-        ground_transport_options = []
-        if distance_km <= 1000:  # Only search ground transport for <= 1000km
-            print(f"\n   🚕 Searching ground transport (distance: {distance_km:.0f}km)...")
-            ground_transport_options = self.ground_transport_agent.search_transport(
-                origin=origin,
-                destination=destination,
-                transport_types=['taxi', 'train', 'bus'],
-                max_results=6
-            )
+        # # Search for ground transport (if distance is reasonable)
+        # ground_transport_options = []
+        # if distance_km <= 1000:  # Only search ground transport for <= 1000km
+        #     print(f"\n   🚕 Searching ground transport (distance: {distance_km:.0f}km)...")
+        #     ground_transport_options = self.ground_transport_agent.search_transport(
+        #         origin=origin,
+        #         destination=destination,
+        #         transport_types=['taxi', 'train', 'bus'],
+        #         max_results=6
+        #     )
             
-            if ground_transport_options:
-                print(f"   ✅ Found {len(ground_transport_options)} ground transport options")
-                cheapest_ground = min(ground_transport_options, key=lambda t: t.price)
-                print(f"   💰 Cheapest ground: INR {cheapest_ground.price:,.0f} ({cheapest_ground.type})")
+        #     if ground_transport_options:
+        #         print(f"   ✅ Found {len(ground_transport_options)} ground transport options")
+        #         cheapest_ground = min(ground_transport_options, key=lambda t: t.price)
+        #         print(f"   💰 Cheapest ground: INR {cheapest_ground.price:,.0f} ({cheapest_ground.type})")
                 
-                # Compare with flight
-                if flights:
-                    comparison = self.ground_transport_agent.compare_with_flight(
-                        cheapest_ground, 
-                        cheapest_flight_inr
-                    )
+        #         # Compare with flight
+        #         if flights:
+        #             comparison = self.ground_transport_agent.compare_with_flight(
+        #                 cheapest_ground, 
+        #                 cheapest_flight_inr
+        #             )
                     
-                    print(f"\n   📊 COMPARISON:")
-                    print(f"   {'─'*70}")
-                    if comparison['recommendation'] == 'ground_transport':
-                        print(f"   💡 RECOMMENDED: Ground Transport ({cheapest_ground.type})")
-                        print(f"   ✅ Save INR {comparison['savings']:,.0f} ({comparison['savings_pct']:.0f}%)")
-                        print(f"   ⏱️  Extra time: {comparison['time_diff_minutes'] // 60}h {comparison['time_diff_minutes'] % 60}m")
-                        print(f"   📝 {comparison['reason']}")
-                    else:
-                        print(f"   💡 RECOMMENDED: Flight")
-                        print(f"   ⏱️  Save time: {abs(comparison['time_diff_minutes']) // 60}h {abs(comparison['time_diff_minutes']) % 60}m")
-                        print(f"   📝 {comparison['reason']}")
-                    print(f"   {'─'*70}")
-        else:
-            print(f"\n   ℹ️  Distance too far ({distance_km:.0f}km) - skipping ground transport")
+        #             print(f"\n   📊 COMPARISON:")
+        #             print(f"   {'─'*70}")
+        #             if comparison['recommendation'] == 'ground_transport':
+        #                 print(f"   💡 RECOMMENDED: Ground Transport ({cheapest_ground.type})")
+        #                 print(f"   ✅ Save INR {comparison['savings']:,.0f} ({comparison['savings_pct']:.0f}%)")
+        #                 print(f"   ⏱️  Extra time: {comparison['time_diff_minutes'] // 60}h {comparison['time_diff_minutes'] % 60}m")
+        #                 print(f"   📝 {comparison['reason']}")
+        #             else:
+        #                 print(f"   💡 RECOMMENDED: Flight")
+        #                 print(f"   ⏱️  Save time: {abs(comparison['time_diff_minutes']) // 60}h {abs(comparison['time_diff_minutes']) % 60}m")
+        #                 print(f"   📝 {comparison['reason']}")
+        #             print(f"   {'─'*70}")
+        # else:
+        #     print(f"\n   ℹ️  Distance too far ({distance_km:.0f}km) - skipping ground transport")
         
-        # Show top options from each category
-        print(f"\n   📋 TOP OPTIONS:")
-        print(f"   {'─'*70}")
+        # # Show top options from each category
+        # print(f"\n   📋 TOP OPTIONS:")
+        # print(f"   {'─'*70}")
         
-        if flights:
-            print(f"   ✈️ FLIGHTS:")
-            for i, f in enumerate(flights[:3], 1):
-                hrs = f.duration_minutes // 60
-                mins = f.duration_minutes % 60
-                original_price = f"{f.currency} {f.price:,.0f}"
-                inr_price = self.currency_converter.convert(f.price, f.currency, 'INR')
-                print(f"      {i}. {f.carrier} {f.flight_id}: {original_price} (≈ INR {inr_price:,.0f}) ({hrs}h {mins}m)")
+        # if flights:
+        #     print(f"   ✈️ FLIGHTS:")
+        #     for i, f in enumerate(flights[:3], 1):
+        #         hrs = f.duration_minutes // 60
+        #         mins = f.duration_minutes % 60
+        #         original_price = f"{f.currency} {f.price:,.0f}"
+        #         inr_price = self.currency_converter.convert(f.price, f.currency, 'INR')
+        #         print(f"      {i}. {f.carrier} {f.flight_id}: {original_price} (≈ INR {inr_price:,.0f}) ({hrs}h {mins}m)")
         
-        if ground_transport_options:
-            print(f"\n   🚕 GROUND TRANSPORT:")
-            for i, t in enumerate(ground_transport_options[:3], 1):
-                hrs = t.duration_minutes // 60
-                mins = t.duration_minutes % 60
-                print(f"      {i}. {t.type.title()} ({t.provider}): INR {t.price:,.0f} ({hrs}h {mins}m)")
+        # if ground_transport_options:
+        #     print(f"\n   🚕 GROUND TRANSPORT:")
+        #     for i, t in enumerate(ground_transport_options[:3], 1):
+        #         hrs = t.duration_minutes // 60
+        #         mins = t.duration_minutes % 60
+        #         print(f"      {i}. {t.type.title()} ({t.provider}): INR {t.price:,.0f} ({hrs}h {mins}m)")
         
 
-        # Pass ALL options to LangGraph — it will pick the cheapest combination
-        # that fits within the total budget. No pre-selection here.
+        # # Pass ALL options to LangGraph — it will pick the cheapest combination
+        # # that fits within the total budget. No pre-selection here.
+        # # selected_transport = flights + ground_transport_options
+
+        # # if not selected_transport:
+        # #     print("\n   ⚠️ No transport options found (will use mock data)")
+        # # else:
+        # #     n_flights = len(flights)
+        # #     n_ground  = len(ground_transport_options)
+        # #     print(f"\n   ✅ Passing ALL {len(selected_transport)} transport options "
+        # #           f"to LangGraph for dynamic budget-aware selection")
+        # #     if n_flights:
+        # #         cheapest_f = min(
+        # #             self.currency_converter.convert(f.price, f.currency, 'INR')
+        # #             for f in flights
+        # #         )
+        # #         print(f"      ✈️  {n_flights} flights  — cheapest INR {cheapest_f:,.0f}")
+        # #     if n_ground:
+        # #         cheapest_g = min(t.price for t in ground_transport_options)
+        # #         print(f"      🚕  {n_ground} ground   — cheapest INR {cheapest_g:,.0f}")
+        # #     print(f"      💡 LangGraph will choose based on total budget INR {budget:,.0f}")
+        # # ── Outbound: all options together ────────────────────────────────
         # selected_transport = flights + ground_transport_options
 
-        # if not selected_transport:
-        #     print("\n   ⚠️ No transport options found (will use mock data)")
+        # # ── Return: search reverse route ──────────────────────────────────
+        # dep_date_obj  = datetime.strptime(departure_date, '%Y-%m-%d')
+        # return_date   = (dep_date_obj + timedelta(days=num_days - 1)).strftime('%Y-%m-%d')
+
+        # print(f"\n   🔄 Searching RETURN transport ({dest_code} → {origin_code}) "
+        #       f"on {return_date}...")
+
+        # return_flights = self.flight_agent.search_flights(
+        #     origin=dest_code,
+        #     destination=origin_code,
+        #     departure_date=return_date,
+        #     max_results=10
+        # )
+
+        # return_ground = []
+        # if distance_km <= 1000:
+        #     return_ground = self.ground_transport_agent.search_transport(
+        #         origin=destination,
+        #         destination=origin,
+        #         transport_types=['taxi', 'train', 'bus'],
+        #         max_results=6
+        #     )
+
+        # # Convert return flight prices to INR
+        # for f in return_flights:
+        #     f.price    = self.currency_converter.convert(f.price, f.currency, 'INR')
+        #     f.currency = 'INR'
+        #     f.is_return = True   # flag for display + day placement
+
+        # for t in return_ground:
+        #     t.is_return = True
+
+        # return_transport_options = return_flights + return_ground
+
+        # if return_transport_options:
+        #     cheapest_ret = min(return_transport_options,
+        #                        key=lambda t: getattr(t, 'price', 0))
+        #     print(f"   ✅ Found {len(return_transport_options)} return options — "
+        #           f"cheapest INR {cheapest_ret.price:,.0f}")
         # else:
-        #     n_flights = len(flights)
-        #     n_ground  = len(ground_transport_options)
-        #     print(f"\n   ✅ Passing ALL {len(selected_transport)} transport options "
-        #           f"to LangGraph for dynamic budget-aware selection")
-        #     if n_flights:
-        #         cheapest_f = min(
-        #             self.currency_converter.convert(f.price, f.currency, 'INR')
-        #             for f in flights
+        #     print("   ⚠️ No return options found — will use mock")
+
+        # # Store on trip_details so other methods can access
+        # trip_details['_return_transport_options'] = return_transport_options
+
+        # if not selected_transport:
+        #     print("\n   ⚠️ No outbound transport found (will use mock data)")
+        # else:
+        #     cheapest_out = min(
+        #         self.currency_converter.convert(
+        #             getattr(t, 'price', 0), getattr(t, 'currency', 'INR'), 'INR'
         #         )
-        #         print(f"      ✈️  {n_flights} flights  — cheapest INR {cheapest_f:,.0f}")
-        #     if n_ground:
-        #         cheapest_g = min(t.price for t in ground_transport_options)
-        #         print(f"      🚕  {n_ground} ground   — cheapest INR {cheapest_g:,.0f}")
-        #     print(f"      💡 LangGraph will choose based on total budget INR {budget:,.0f}")
-        # ── Outbound: all options together ────────────────────────────────
-        selected_transport = flights + ground_transport_options
-
-        # ── Return: search reverse route ──────────────────────────────────
-        dep_date_obj  = datetime.strptime(departure_date, '%Y-%m-%d')
-        return_date   = (dep_date_obj + timedelta(days=num_days - 1)).strftime('%Y-%m-%d')
-
-        print(f"\n   🔄 Searching RETURN transport ({dest_code} → {origin_code}) "
-              f"on {return_date}...")
-
-        return_flights = self.flight_agent.search_flights(
-            origin=dest_code,
-            destination=origin_code,
-            departure_date=return_date,
-            max_results=10
-        )
-
-        return_ground = []
-        if distance_km <= 1000:
-            return_ground = self.ground_transport_agent.search_transport(
-                origin=destination,
-                destination=origin,
-                transport_types=['taxi', 'train', 'bus'],
-                max_results=6
-            )
-
-        # Convert return flight prices to INR
-        for f in return_flights:
-            f.price    = self.currency_converter.convert(f.price, f.currency, 'INR')
-            f.currency = 'INR'
-            f.is_return = True   # flag for display + day placement
-
-        for t in return_ground:
-            t.is_return = True
-
-        return_transport_options = return_flights + return_ground
-
-        if return_transport_options:
-            cheapest_ret = min(return_transport_options,
-                               key=lambda t: getattr(t, 'price', 0))
-            print(f"   ✅ Found {len(return_transport_options)} return options — "
-                  f"cheapest INR {cheapest_ret.price:,.0f}")
-        else:
-            print("   ⚠️ No return options found — will use mock")
-
-        # Store on trip_details so other methods can access
-        trip_details['_return_transport_options'] = return_transport_options
-
-        if not selected_transport:
-            print("\n   ⚠️ No outbound transport found (will use mock data)")
-        else:
-            cheapest_out = min(
-                self.currency_converter.convert(
-                    getattr(t, 'price', 0), getattr(t, 'currency', 'INR'), 'INR'
-                )
-                for t in selected_transport
-            )
-            cheapest_ret_cost = (
-                min(getattr(t, 'price', 0) for t in return_transport_options)
-                if return_transport_options else 0
-            )
-            print(f"\n   💡 LangGraph will optimise outbound + return + stay within "
-                  f"total budget INR {budget:,.0f}")
-            print(f"      Cheapest outbound: INR {cheapest_out:,.0f}")
-            print(f"      Cheapest return:   INR {cheapest_ret_cost:,.0f}")
-            print(f"      Remaining for hotel/food/activities: "
-                  f"INR {budget - cheapest_out - cheapest_ret_cost:,.0f}")
+        #         for t in selected_transport
+        #     )
+        #     cheapest_ret_cost = (
+        #         min(getattr(t, 'price', 0) for t in return_transport_options)
+        #         if return_transport_options else 0
+        #     )
+        #     print(f"\n   💡 LangGraph will optimise outbound + return + stay within "
+        #           f"total budget INR {budget:,.0f}")
+        #     print(f"      Cheapest outbound: INR {cheapest_out:,.0f}")
+        #     print(f"      Cheapest return:   INR {cheapest_ret_cost:,.0f}")
+        #     print(f"      Remaining for hotel/food/activities: "
+        #           f"INR {budget - cheapest_out - cheapest_ret_cost:,.0f}")
 
         
         
-        # [3/6] Search accommodations
-        print(f"\n{'='*80}")
-        print("[3/6] 🏨 SEARCHING ACCOMMODATIONS")
-        print("="*80)
-        print(f"   Location: {destination}")
-        print(f"   Check-in: {departure_date}, Check-out: {return_date}")
+        # # [3/6] Search accommodations
+        # print(f"\n{'='*80}")
+        # print("[3/6] 🏨 SEARCHING ACCOMMODATIONS")
+        # print("="*80)
+        # print(f"   Location: {destination}")
+        # print(f"   Check-in: {departure_date}, Check-out: {return_date}")
         
-        hotels = self.hotel_agent.search_accommodations(
-            destination=destination,
-            check_in=departure_date,
-            check_out=return_date,
-            max_results=10
-        )
+        # hotels = self.hotel_agent.search_accommodations(
+        #     destination=destination,
+        #     check_in=departure_date,
+        #     check_out=return_date,
+        #     max_results=10
+        # )
         
-        if hotels:
-            print(f"✅ Found {len(hotels)} accommodations")
-            for i, h in enumerate(hotels[:3], 1):
-                original_price = f"{h.currency} {h.price_per_night:,.0f}"
-                inr_price = self.currency_converter.convert(h.price_per_night, h.currency, 'INR')
-                print(f"   {i}. {h.name}: {original_price}/night (≈ INR {inr_price:,.0f}) [{h.type}]")
-        else:
-            print("   ⚠️ No accommodations found (will use mock data)")
-            hotels = []
+        # if hotels:
+        #     print(f"✅ Found {len(hotels)} accommodations")
+        #     for i, h in enumerate(hotels[:3], 1):
+        #         original_price = f"{h.currency} {h.price_per_night:,.0f}"
+        #         inr_price = self.currency_converter.convert(h.price_per_night, h.currency, 'INR')
+        #         print(f"   {i}. {h.name}: {original_price}/night (≈ INR {inr_price:,.0f}) [{h.type}]")
+        # else:
+        #     print("   ⚠️ No accommodations found (will use mock data)")
+        #     hotels = []
         
-        # [4/6] Search restaurants
-        print(f"\n{'='*80}")
-        print("[4/6] 🍽️  SEARCHING RESTAURANTS")
-        print("="*80)
-        print(f"   Location: {destination}")
-        if dietary:
-            print(f"   Dietary: {', '.join(dietary)}")
+        # # [4/6] Search restaurants
+        # print(f"\n{'='*80}")
+        # print("[4/6] 🍽️  SEARCHING RESTAURANTS")
+        # print("="*80)
+        # print(f"   Location: {destination}")
+        # if dietary:
+        #     print(f"   Dietary: {', '.join(dietary)}")
         
-        restaurants = self.restaurant_agent.search_restaurants(
-            location=destination,
-            dietary_restrictions=dietary if dietary else None,
-            max_results=20
-        )
+        # restaurants = self.restaurant_agent.search_restaurants(
+        #     location=destination,
+        #     dietary_restrictions=dietary if dietary else None,
+        #     max_results=20
+        # )
         
-        if restaurants:
-            print(f"✅ Found {len(restaurants)} restaurants")
-            restaurants = self.restaurant_agent.rank_restaurants(restaurants)
-            for i, r in enumerate(restaurants[:3], 1):
-                print(f"   {i}. {r.name}: {r.cuisine_type}")
-        else:
-            print("   ⚠️ No restaurants found (will use mock data)")
-            restaurants = []
+        # if restaurants:
+        #     print(f"✅ Found {len(restaurants)} restaurants")
+        #     restaurants = self.restaurant_agent.rank_restaurants(restaurants)
+        #     for i, r in enumerate(restaurants[:3], 1):
+        #         print(f"   {i}. {r.name}: {r.cuisine_type}")
+        # else:
+        #     print("   ⚠️ No restaurants found (will use mock data)")
+        #     restaurants = []
         
-        # [5/6] Search activities
-        print(f"\n{'='*80}")
-        print("[5/6] 🎭 SEARCHING ACTIVITIES")
-        print("="*80)
-        print(f"   Location: {destination}")
-        print(f"   Interests: {', '.join(interests)}")
+        # # [5/6] Search activities
+        # print(f"\n{'='*80}")
+        # print("[5/6] 🎭 SEARCHING ACTIVITIES")
+        # print("="*80)
+        # print(f"   Location: {destination}")
+        # print(f"   Interests: {', '.join(interests)}")
         
-        activities = self.activity_agent.search_activities(
-            location=destination,
-            interests=interests if interests else None,
-            max_results=25
-        )
+        # activities = self.activity_agent.search_activities(
+        #     location=destination,
+        #     interests=interests if interests else None,
+        #     max_results=25
+        # )
         
-        if activities:
-            print(f"✅ Found {len(activities)} activities")
-            for i, a in enumerate(activities[:3], 1):
-                print(f"   {i}. {a.name}: {a.description[:50]}...")
-        else:
-            print("   ⚠️ No activities found (will use mock data)")
-            activities = []
+        # if activities:
+        #     print(f"✅ Found {len(activities)} activities")
+        #     for i, a in enumerate(activities[:3], 1):
+        #         print(f"   {i}. {a.name}: {a.description[:50]}...")
+        # else:
+        #     print("   ⚠️ No activities found (will use mock data)")
+        #     activities = []
         
-        # [6/6] Optimize itinerary
-        print(f"\n{'='*80}")
-        print("[6/6] 🧮 OPTIMIZING ITINERARY")
-        print("="*80)
+        # # [6/6] Optimize itinerary
+        # print(f"\n{'='*80}")
+        # print("[6/6] 🧮 OPTIMIZING ITINERARY")
+        # print("="*80)
         
-        # Convert all prices to base currency (INR) for optimization
-        print("   💱 Converting all prices to INR...")
-        base_currency = 'INR'
+        # # Convert all prices to base currency (INR) for optimization
+        # print("   💱 Converting all prices to INR...")
+        # base_currency = 'INR'
         
-        # Convert transport options (only the selected type)
-        transport_converted = []
-        for transport in selected_transport:
-            if hasattr(transport, 'price') and hasattr(transport, 'currency'):
-                # Check if it's a flight or ground transport
-                if hasattr(transport, 'carrier'):  # It's a flight
-                    converted_price = self.currency_converter.convert(
-                        transport.price, 
-                        transport.currency, 
-                        base_currency
-                    )
-                    transport.price = converted_price
-                    transport.currency = base_currency
-                else:  # It's ground transport (already in INR)
-                    pass  # Already in INR
+        # # Convert transport options (only the selected type)
+        # transport_converted = []
+        # for transport in selected_transport:
+        #     if hasattr(transport, 'price') and hasattr(transport, 'currency'):
+        #         # Check if it's a flight or ground transport
+        #         if hasattr(transport, 'carrier'):  # It's a flight
+        #             converted_price = self.currency_converter.convert(
+        #                 transport.price, 
+        #                 transport.currency, 
+        #                 base_currency
+        #             )
+        #             transport.price = converted_price
+        #             transport.currency = base_currency
+        #         else:  # It's ground transport (already in INR)
+        #             pass  # Already in INR
                 
-                transport_converted.append(transport)
+        #         transport_converted.append(transport)
         
-        print(f"   ✅ Using {len(transport_converted)} {transport_converted[0].item_type if transport_converted else 'transport'} options")
-        # Convert hotels
-        hotels_converted = []
-        for hotel in hotels:
-            converted_price = self.currency_converter.convert(
-                hotel.price_per_night,
-                hotel.currency,
-                base_currency
-            )
-            hotel.price_per_night = converted_price
-            hotel.currency = base_currency
-            hotels_converted.append(hotel)
+        # print(f"   ✅ Using {len(transport_converted)} {transport_converted[0].item_type if transport_converted else 'transport'} options")
+        # # Convert hotels
+        # hotels_converted = []
+        # for hotel in hotels:
+        #     converted_price = self.currency_converter.convert(
+        #         hotel.price_per_night,
+        #         hotel.currency,
+        #         base_currency
+        #     )
+        #     hotel.price_per_night = converted_price
+        #     hotel.currency = base_currency
+        #     hotels_converted.append(hotel)
         
-        # Convert restaurants
-        restaurants_converted = []
-        for restaurant in restaurants:
-            converted_price = self.currency_converter.convert(
-                restaurant.average_meal_cost,
-                restaurant.currency,
-                base_currency
-            )
-            restaurant.average_meal_cost = converted_price
-            restaurant.currency = base_currency
-            restaurants_converted.append(restaurant)
+        # # Convert restaurants
+        # restaurants_converted = []
+        # for restaurant in restaurants:
+        #     converted_price = self.currency_converter.convert(
+        #         restaurant.average_meal_cost,
+        #         restaurant.currency,
+        #         base_currency
+        #     )
+        #     restaurant.average_meal_cost = converted_price
+        #     restaurant.currency = base_currency
+        #     restaurants_converted.append(restaurant)
         
-        # Convert activities
-        activities_converted = []
-        for activity in activities:
-            if hasattr(activity, 'cost') and hasattr(activity, 'currency'):
-                converted_price = self.currency_converter.convert(
-                    activity.price,
-                    activity.currency,
-                    base_currency
-                )
-                activity.price = converted_price
-                activity.currency = base_currency
-            activities_converted.append(activity)
+        # # Convert activities
+        # activities_converted = []
+        # for activity in activities:
+        #     if hasattr(activity, 'cost') and hasattr(activity, 'currency'):
+        #         converted_price = self.currency_converter.convert(
+        #             activity.price,
+        #             activity.currency,
+        #             base_currency
+        #         )
+        #         activity.price = converted_price
+        #         activity.currency = base_currency
+        #     activities_converted.append(activity)
         
-        print(f"   ✅ All prices converted to {base_currency}")
+        # print(f"   ✅ All prices converted to {base_currency}")
         
-        # ======================================================================
-        # FEATURE FLAG: Choose optimizer (OR-Tools vs LangGraph)
-        # ======================================================================
+        # # ======================================================================
+        # # FEATURE FLAG: Choose optimizer (OR-Tools vs LangGraph)
+        # # ======================================================================
         
-        if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE:
-            # NEW: Use LangGraph optimizer with dynamic constraints
-            optimized = self._optimize_with_langgraph(
-                transport_converted, hotels_converted, restaurants_converted,
-                activities_converted, num_days, budget, user_profile, trip_details
-            )
-        else:
-            # EXISTING: Use OR-Tools optimizer with hardcoded ratios
-            optimized = self._optimize_with_ortools(
-                transport_converted, hotels_converted, restaurants_converted,
-                activities_converted, num_days, user_profile
-            )
+        # if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE:
+        #     # NEW: Use LangGraph optimizer with dynamic constraints
+        #     optimized = self._optimize_with_langgraph(
+        #         transport_converted, hotels_converted, restaurants_converted,
+        #         activities_converted, num_days, budget, user_profile, trip_details
+        #     )
+        # else:
+        #     # EXISTING: Use OR-Tools optimizer with hardcoded ratios
+        #     optimized = self._optimize_with_ortools(
+        #         transport_converted, hotels_converted, restaurants_converted,
+        #         activities_converted, num_days, user_profile
+        #     )
+
+        # In generate_itinerary(), replace steps [2/6]..[6/6] with:
+
+        print(f"\n{'='*80}")
+        print("[2-6/6] 🔍 SEARCH + OPTIMIZE (Sub-method 1)")
+        print("="*80)
+
+        optimized = self._fetch_with_expansion(
+            origin_code=origin_code,
+            dest_code=dest_code,
+            destination=destination,
+            departure_date=departure_date,
+            return_date=return_date,
+            interests=interests,
+            dietary=dietary,
+            budget=budget,
+            num_days=num_days,
+            user_profile=user_profile,
+            trip_details=trip_details,
+            initial_counts={"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25},
+            max_rounds=3,      # how many full cycles before giving up
+        )
+
+        if optimized is None or "error" in optimized:
+            print("❌ Could not generate itinerary.")
+            return
         
         if 'error' in optimized:
             print(f"   ❌ Optimization error: {optimized['error']}")
@@ -630,6 +658,149 @@ Examples:
 
         return optimized
     
+    # orchestrator.py — add this method to TravelItineraryOrchestrator
+
+    def _fetch_with_expansion(
+        self,
+        origin_code: str,
+        dest_code: str,
+        destination: str,
+        departure_date: str,
+        return_date: str,
+        interests: Optional[list],
+        dietary: Optional[list],
+        budget: float,
+        num_days: int,
+        user_profile,
+        trip_details: dict,
+        initial_counts: Optional[dict] = None,
+        max_rounds: int = 3,
+    ) -> Optional[dict]:
+        """
+        Sub-method 1 from the notes:
+        1. Fetch P1..P4 options from all agents (initial_counts per agent).
+        2. Try to optimise — if a feasible plan is found, return it.
+        3. If not, expand ONE agent's search space by δ, recheck.
+        4. Cycle through all agents before declaring a full round done.
+        5. If still nothing after max_rounds, return None.
+
+        initial_counts: {"flight": P1, "hotel": P2, "restaurant": P3, "activity": P4}
+        """
+        if initial_counts is None:
+            initial_counts = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25}
+
+        # ── agent order defines the expansion sequence ────────────────────
+        agent_order = ["flight", "hotel", "restaurant", "activity"]
+
+        # current max-results per agent (grows by DELTA on each expansion)
+        limits = dict(initial_counts)
+
+        for round_num in range(max_rounds):
+            for agent_idx, expanding_agent in enumerate(agent_order):
+
+                # ── 1. Fetch options for all agents with current limits ────
+                print(f"\n   🔄 Round {round_num+1}, expanding '{expanding_agent}' "
+                    f"(limits={limits})")
+
+                flights = self.flight_agent.search_flights(
+                    origin=origin_code,
+                    destination=dest_code,
+                    departure_date=departure_date,
+                    max_results=limits["flight"],
+                )
+
+                hotels = self.hotel_agent.search_accommodations(
+                    destination=destination,
+                    check_in=departure_date,
+                    check_out=return_date,
+                    max_results=limits["hotel"],
+                )
+
+                restaurants = self.restaurant_agent.search_restaurants(
+                    location=destination,
+                    dietary_restrictions=dietary or None,
+                    max_results=limits["restaurant"],
+                )
+
+                activities = self.activity_agent.search_activities(
+                    location=destination,
+                    interests=interests or None,
+                    max_results=limits["activity"],
+                )
+
+                # ── 2. Currency conversion (in-place, same as existing code) ──
+                base = "INR"
+                for f in flights:
+                    f.price = self.currency_converter.convert(f.price, f.currency, base)
+                    f.currency = base
+                for h in hotels:
+                    h.price_per_night = self.currency_converter.convert(
+                        h.price_per_night, h.currency, base)
+                    h.currency = base
+                for r in restaurants:
+                    r.average_meal_cost = self.currency_converter.convert(
+                        r.average_meal_cost, r.currency, base)
+                    r.currency = base
+                for a in activities:
+                    if hasattr(a, "price"):
+                        a.price = self.currency_converter.convert(
+                            a.price, a.currency, base)
+                        a.currency = base
+
+                # ground transport (same logic as existing generate_itinerary)
+                distance_km = self.ground_transport_agent.calculate_distance(
+                    trip_details.get("origin_city", ""), destination)
+                ground = []
+                if distance_km <= 1000:
+                    ground = self.ground_transport_agent.search_transport(
+                        origin=trip_details.get("origin_city", ""),
+                        destination=destination,
+                        transport_types=["taxi", "train", "bus"],
+                        max_results=6,
+                    )
+                transport_all = flights + ground
+
+                # ── 3. Try to optimise ─────────────────────────────────────
+                result = self._optimize_with_langgraph(
+                    transport_all, hotels, restaurants, activities,
+                    num_days, budget, user_profile, trip_details,
+                ) if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE else \
+                    self._optimize_with_ortools(
+                        transport_all, hotels, restaurants, activities,
+                        num_days, user_profile,
+                    )
+
+                # ── 4. Feasibility check ───────────────────────────────────
+                # A plan is "feasible" when the optimiser succeeded AND
+                # total cost is within budget.
+                is_feasible = (
+                    "error" not in result
+                    and result.get("total_cost", float("inf")) <= budget
+                )
+
+                if is_feasible:
+                    print(f"   ✅ Sub-method 1: feasible plan found "
+                        f"(round {round_num+1}, agent '{expanding_agent}')")
+                    return result
+
+                print(f"   ↳ Not feasible "
+                    f"(cost={result.get('total_cost', '?'):.0f} > budget={budget:.0f}), "
+                    f"expanding next agent…")
+
+                # ── 5. Expand the *next* agent for the following iteration ──
+                next_agent = agent_order[(agent_idx + 1) % len(agent_order)]
+                limits[next_agent] += self.DELTA
+
+            # after cycling all agents, bump every limit by δ before next round
+            print(f"   ⚠️  Round {round_num+1} exhausted all agents — "
+                f"increasing all limits by {self.DELTA} for round {round_num+2}")
+            for key in limits:
+                limits[key] += self.DELTA
+
+        print("   ❌ Sub-method 1: no feasible plan after "
+            f"{max_rounds} rounds. Returning best effort.")
+        return None   # caller decides what to do (fall back, show error, etc.)
+
     # ============================================================================
     # OPTIMIZER SELECTION (Feature Flag)
     # ============================================================================
@@ -2028,8 +2199,8 @@ Examples:
 
 
     def _create_mock_return_flight(self, origin_code: str, destination_code: str, 
-                                date: str, origin_city: str = None, 
-                                destination_city: str = None):
+                                date: str, origin_city: Optional[str] = None, 
+                                destination_city: Optional[str] = None):
         """
         Create a realistic mock return flight
         

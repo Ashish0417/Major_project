@@ -51,6 +51,7 @@ import time
 import tracemalloc
 import psutil
 import os as os_module
+import copy
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -302,6 +303,7 @@ Examples:
         except Exception as e:
             print(f"   ⚠️ Extraction error: {e}")
             return {}
+        
     
     def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None):
         """Generate complete optimized day-by-day itinerary"""
@@ -1601,6 +1603,30 @@ Examples:
                 f"INR {min_possible:,.0f} for this trip.")
             return {"error": "budget_too_low", "min_required": min_possible}
         
+        def _sequential_init_counts(num_days, MEALS_PER_DAY=2, ACTIVITIES_PER_DAY=2):
+            """
+            Returns the (flight, hotel, restaurant, activity) starting counts
+            for _fetch_with_sequential_generation.
+        
+            Restaurants and activities start at the minimum required for full coverage.
+            Flights and hotels start at 1 (cheapest-first exploration).
+            
+            Activities are requested with a 2x multiplier because filtering by user interests
+            typically removes 30-50% of results, so we request more upfront to ensure
+            we have enough after filtering.
+            """
+            min_restaurants = num_days * MEALS_PER_DAY
+            min_activities  = (num_days - 1) * ACTIVITIES_PER_DAY + 1
+            # Request 2x activities upfront to account for interest filtering
+            requested_activities = min_activities * 2
+        
+            return dict(
+                flights=1,
+                hotels=1,
+                restaurants=min_restaurants,       # e.g. 6 for a 3-day trip
+                activities=requested_activities,   # e.g. 10 for a 3-day trip (2x the minimum)
+            )
+        
         # ── Calculate minimum unique options required ───────────────────────────
         MEALS_PER_DAY = 2
         ACTIVITIES_PER_DAY = 2
@@ -1617,10 +1643,20 @@ Examples:
         best_plan_overall = None
         best_cost_overall = float('inf')
         # Start with MINIMAL for flights & hotels, realistic minimum for restaurants & activities
-        current_restaurant_count = min_restaurants_needed
-        current_activity_count = min_activities_needed
-        current_flight_count = 1    # Start minimal: 1 flight option
-        current_hotel_count = 1     # Start minimal: 1 hotel option
+        # current_restaurant_count = min_restaurants_needed
+        # current_activity_count = min_activities_needed
+        # current_flight_count = 1    # Start minimal: 1 flight option
+        # current_hotel_count = 1     # Start minimal: 1 hotel option
+        init = _sequential_init_counts(num_days, MEALS_PER_DAY, ACTIVITIES_PER_DAY)
+        current_flight_count      = init['flights']
+        current_hotel_count       = init['hotels']
+        current_restaurant_count  = init['restaurants']
+        current_activity_count    = init['activities']
+        # Sanity-check: never request fewer than the coverage minimum
+        current_restaurant_count  = max(current_restaurant_count, min_restaurants_needed)
+        # Activities: keep the multiplied count from _sequential_init_counts (already accounts for filtering)
+        # Don't force it down to min_activities_needed, that would undo the 2x multiplier
+
         base = "INR"
         
         for iteration in range(5):  # Max 5 iterations (increasing diversity each time)
@@ -2085,18 +2121,53 @@ Examples:
                 unique_activities.append(_to_option_candidate(a, 'activity', i))
         
         # Distribute restaurants using modulo (cycles through list without repeating same item consecutively)
-        rest_pool = []
-        for meal_slot in range(num_days * MEALS_PER_DAY):
-            if unique_restaurants:
-                selected = unique_restaurants[meal_slot % len(unique_restaurants)]
-                rest_pool.append(selected)
+        # rest_pool = []
+        # for meal_slot in range(num_days * MEALS_PER_DAY):
+        #     if unique_restaurants:
+        #         selected = unique_restaurants[meal_slot % len(unique_restaurants)]
+        #         rest_pool.append(selected)
         
-        # Distribute activities using modulo (cycles through list without repeating same item consecutively)
-        act_pool = []
-        for activity_slot in range((num_days - 1) * ACTIVITIES_PER_DAY + 1):
-            if unique_activities:
-                selected = unique_activities[activity_slot % len(unique_activities)]
-                act_pool.append(selected)
+        # # Distribute activities using modulo (cycles through list without repeating same item consecutively)
+        # act_pool = []
+        # for activity_slot in range((num_days - 1) * ACTIVITIES_PER_DAY + 1):
+        #     if unique_activities:
+        #         selected = unique_activities[activity_slot % len(unique_activities)]
+        #         act_pool.append(selected)
+        def _build_pools(unique_restaurants, unique_activities, num_days,
+                 MEALS_PER_DAY=2, ACTIVITIES_PER_DAY=2):
+            """
+            Build per-slot pools for restaurants and activities.
+        
+            Each slot receives a DEEP COPY of the source item so that
+            _assign_item_times() can write a unique scheduled_time into every copy
+            without aliasing effects.
+        
+            A unique id is stamped on each copy:  original_id + "__slot{N}"
+            """
+        
+            total_meal_slots     = num_days * MEALS_PER_DAY
+            # last day gets only 1 activity slot
+            total_activity_slots = (num_days - 1) * ACTIVITIES_PER_DAY + 1
+        
+            rest_pool = []
+            for slot in range(total_meal_slots):
+                if unique_restaurants:
+                    src   = unique_restaurants[slot % len(unique_restaurants)]
+                    clone = copy.deepcopy(src)
+                    clone.id = f"{src.id}__slot{slot}"          # unique id per slot
+                    rest_pool.append(clone)
+        
+            act_pool = []
+            for slot in range(total_activity_slots):
+                if unique_activities:
+                    src   = unique_activities[slot % len(unique_activities)]
+                    clone = copy.deepcopy(src)
+                    clone.id = f"{src.id}__slot{slot}"
+                    act_pool.append(clone)
+        
+            return rest_pool, act_pool
+        
+        rest_pool, act_pool = _build_pools(unique_restaurants, unique_activities, num_days,MEALS_PER_DAY, ACTIVITIES_PER_DAY)
 
         # ------------------------------------------------------------------
         # 5.  Distribute restaurants  ── MEALS_PER_DAY per day

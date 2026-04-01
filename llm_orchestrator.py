@@ -716,11 +716,14 @@ Examples:
         # In generate_itinerary(), replace steps [2/6]..[6/6] with:
 
         print(f"\n{'='*80}")
-        print("[2-6/6] 🔍 SEARCH + OPTIMIZE (Sub-method 1)")
+        print("[2-6/6] 🔍 SEARCH + OPTIMIZE (Comparing Two Expansion Strategies)")
         print("="*80)
 
-        perf_monitor.start_step("Search & Fetch")
-        optimized = self._fetch_with_expansion(
+        # ── STRATEGY 1: One-by-one expansion ───────────────────────────────────
+        print(f"\n📊 STRATEGY 1: One-by-One Expansion (cycle through agents)")
+        print("-" * 80)
+        perf_monitor.start_step("OneByOne Expansion")
+        result_onebyones = self._fetch_with_expansion(
             origin_code=origin_code,
             dest_code=dest_code,
             destination=destination,
@@ -733,10 +736,94 @@ Examples:
             user_profile=user_profile,
             trip_details=trip_details,
             initial_counts={"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25},
-            max_rounds=3,      # how many full cycles before giving up
-            perf_monitor=perf_monitor,  # Pass performance monitor for sub-step tracking
+            max_rounds=3,
+            perf_monitor=None,  # Don't track sub-steps separately
         )
-        perf_monitor.finish_step("Search & Fetch")
+        perf_monitor.finish_step("OneByOne Expansion")
+
+        # ── STRATEGY 2: Parallel expansion ─────────────────────────────────────
+        print(f"\n📊 STRATEGY 2: Parallel Expansion (expand all agents together)")
+        print("-" * 80)
+        perf_monitor.start_step("Parallel Expansion")
+        result_parallel = self._fetch_with_parallel_expansion(
+            origin_code=origin_code,
+            dest_code=dest_code,
+            destination=destination,
+            departure_date=departure_date,
+            return_date=return_date,
+            interests=interests,
+            dietary=dietary,
+            budget=budget,
+            num_days=num_days,
+            user_profile=user_profile,
+            trip_details=trip_details,
+            initial_counts={"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25},
+            max_rounds=3,
+            perf_monitor=None,
+        )
+        perf_monitor.finish_step("Parallel Expansion")
+
+        # ── COMPARISON ─────────────────────────────────────────────────────────
+        print(f"\n{'='*80}")
+        print("📊 STRATEGY COMPARISON")
+        print("="*80)
+        
+        strategy_1_valid = (
+            result_onebyones is not None 
+            and "error" not in result_onebyones 
+            and result_onebyones.get("total_cost", float("inf")) <= budget
+        )
+        strategy_2_valid = (
+            result_parallel is not None 
+            and "error" not in result_parallel 
+            and result_parallel.get("total_cost", float("inf")) <= budget
+        )
+        
+        cost_1 = result_onebyones.get('total_cost', float('inf')) if result_onebyones else float('inf')
+        cost_2 = result_parallel.get('total_cost', float('inf')) if result_parallel else float('inf')
+        
+        print(f"{'Strategy':<25} | {'Valid':<8} | {'Cost (INR)':<15} | {'vs Budget':<12}")
+        print("-" * 80)
+        
+        status_1 = "✅ Yes" if strategy_1_valid else "❌ No"
+        margin_1 = f"{((cost_1 / budget - 1) * 100):+.1f}%" if cost_1 < float('inf') else "N/A"
+        print(f"{'One-by-One':<25} | {status_1:<8} | {cost_1:>13,.0f} | {margin_1:>12}")
+        
+        status_2 = "✅ Yes" if strategy_2_valid else "❌ No"
+        margin_2 = f"{((cost_2 / budget - 1) * 100):+.1f}%" if cost_2 < float('inf') else "N/A"
+        print(f"{'Parallel':<25} | {status_2:<8} | {cost_2:>13,.0f} | {margin_2:>12}")
+        
+        print("-" * 80)
+        
+        # Choose the best valid result
+        if strategy_1_valid and strategy_2_valid:
+            if cost_1 <= cost_2:
+                optimized = result_onebyones
+                winner = "One-by-One"
+                savings = cost_2 - cost_1
+            else:
+                optimized = result_parallel
+                winner = "Parallel"
+                savings = cost_1 - cost_2
+            print(f"🏆 WINNER: {winner} strategy (saves INR {savings:,.0f})")
+        elif strategy_1_valid:
+            optimized = result_onebyones
+            print(f"🏆 WINNER: One-by-One strategy (feasible)")
+        elif strategy_2_valid:
+            optimized = result_parallel
+            print(f"🏆 WINNER: Parallel strategy (feasible)")
+        else:
+            # Neither strategy is feasible within budget - use best effort
+            if cost_1 < cost_2:
+                optimized = result_onebyones
+                overage = cost_1 - budget
+                print(f"⚠️  Both strategies over budget. Best effort: One-by-One (+INR {overage:,.0f})")
+            else:
+                optimized = result_parallel
+                overage = cost_2 - budget
+                print(f"⚠️  Both strategies over budget. Best effort: Parallel (+INR {overage:,.0f})")
+
+        print("=" * 80)
 
         if optimized is None or "error" in optimized:
             print("❌ Could not generate itinerary.")
@@ -1092,6 +1179,292 @@ Examples:
         # Budget is impossible - suggest realistic budget
         print(f"   💰 Suggested minimum budget: INR {best_cost_overall:.0f}")
         return None   # caller decides what to do
+
+    def _fetch_with_parallel_expansion(
+        self,
+        origin_code: str,
+        dest_code: str,
+        destination: str,
+        departure_date: str,
+        return_date: str,
+        interests: Optional[list],
+        dietary: Optional[list],
+        budget: float,
+        num_days: int,
+        user_profile,
+        trip_details: dict,
+        initial_counts: Optional[dict] = None,
+        max_rounds: int = 3,
+        perf_monitor: Optional['PerformanceMonitor'] = None,
+    ) -> Optional[dict]:
+        """
+        Alternative strategy: Expand ALL agents together each round (not one-by-one).
+        
+        Strategy comparison:
+        - One-by-one: Cycle through each agent, increasing one at a time
+          (more granular, but more optimization calls)
+        - Parallel: Increase all agents together each round
+          (fewer optimization calls, potentially faster)
+          
+        Rounds structure:
+        1. Round 0: Try with initial counts
+        2. Rounds 1-N: Increase ALL agent limits by DELTA, then try optimization
+        3. If feasible, return; else continue to next round
+        """
+        
+        # ── PRE-CHECK: estimate minimum possible cost ──────────────────────────
+        def _estimate_min_cost(destination, departure_date, return_date, num_days):
+            """Quick sanity check before expensive expansion loop."""
+            
+            # Rough estimates:
+            MIN_FLIGHT_COST = 3000   # INR
+            MIN_HOTEL_PER_NIGHT = 800     # INR
+            MIN_RESTAURANT_PER_MEAL = 300  # INR
+            MIN_ACTIVITY_PER_DAY = 500    # INR
+            
+            min_total = (
+                MIN_FLIGHT_COST * 2  # outbound + return
+                + MIN_HOTEL_PER_NIGHT * num_days
+                + MIN_RESTAURANT_PER_MEAL * 2 * num_days  # 2 meals per day
+                + MIN_ACTIVITY_PER_DAY * num_days
+            )
+            return min_total
+
+        min_possible = _estimate_min_cost(destination, departure_date, return_date, num_days)
+        if min_possible > budget:
+            print(f"   ❌ Budget INR {budget:,.0f} is below estimated minimum "
+                f"INR {min_possible:,.0f} for this trip. "
+                f"Please increase your budget.")
+            return {"error": "budget_too_low", "min_required": min_possible}
+        
+        if initial_counts is None:
+            initial_counts = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+        else:
+            # Ensure all required keys exist (add defaults if missing)
+            defaults = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+            for key, value in defaults.items():
+                if key not in initial_counts:
+                    initial_counts[key] = value
+
+        # ── agent order ────────────────────────────────────────────────────────
+        agent_order = ["flight", "ground_transport", "hotel", "restaurant", "activity"]
+
+        # current max-results per agent (ALL grow together each round)
+        limits = dict(initial_counts)
+
+        # ✅ Cache for reuse across rounds
+        cached = {}
+
+        # ── ROUND 0: Try with initial counts ────────────────────────────────
+        print(f"\n   🔄 Round 0 (parallel - initial): limits={limits}")
+        
+        flights = self.flight_agent.search_flights(
+            origin=origin_code,
+            destination=dest_code,
+            departure_date=departure_date,
+            max_results=limits["flight"],
+        )
+
+        hotels = self.hotel_agent.search_accommodations(
+            destination=destination,
+            check_in=departure_date,
+            check_out=return_date,
+            max_results=limits["hotel"],
+        )
+
+        restaurants = self.restaurant_agent.search_restaurants(
+            location=destination,
+            dietary_restrictions=dietary or None,
+            max_results=limits["restaurant"],
+        )
+
+        activities = self.activity_agent.search_activities(
+            location=destination,
+            interests=interests or None,
+            max_results=limits["activity"],
+        )
+
+        # ── Currency conversion ────────────────────────────────────────────────
+        base = "INR"
+        for f in flights:
+            f.price = self.currency_converter.convert(f.price, f.currency, base)
+            f.currency = base
+        for h in hotels:
+            h.price_per_night = self.currency_converter.convert(h.price_per_night, h.currency, base)
+            h.currency = base
+        for r in restaurants:
+            r.average_meal_cost = self.currency_converter.convert(r.average_meal_cost, r.currency, base)
+            r.currency = base
+        for a in activities:
+            if hasattr(a, "price"):
+                a.price = self.currency_converter.convert(a.price, a.currency, base)
+                a.currency = base
+
+        # Ground transport
+        distance_km = self.ground_transport_agent.calculate_distance(
+            trip_details.get("origin_city", ""), destination)
+        ground = []
+        if distance_km <= 1000:
+            ground = self.ground_transport_agent.search_transport(
+                origin=trip_details.get("origin_city", ""),
+                destination=destination,
+                transport_types=["taxi", "train", "bus"],
+                max_results=limits["ground_transport"],
+            )
+        
+        transport_all = sorted(
+            flights + ground,
+            key=lambda t: getattr(t, 'price', float('inf'))
+        )
+
+        # ✅ Cache Round 0 results
+        cached["flight"] = flights
+        cached["hotel"] = hotels
+        cached["restaurant"] = restaurants
+        cached["activity"] = activities
+        cached["ground_transport"] = ground
+
+        # ── Try to optimize with initial counts
+        result = self._optimize_with_langgraph(
+            transport_all, hotels, restaurants, activities,
+            num_days, budget, user_profile, trip_details,
+        ) if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE else \
+            self._optimize_with_ortools(
+                transport_all, hotels, restaurants, activities,
+                num_days, user_profile,
+            )
+
+        is_feasible = (
+            "error" not in result
+            and result.get("total_cost", float("inf")) <= budget
+        )
+
+        if is_feasible:
+            print(f"   ✅ Parallel expansion: feasible plan found in Round 0")
+            return result
+
+        print(f"   ❌ Round 0 not feasible (cost={result.get('total_cost', '?'):.0f} > budget={budget:.0f})")
+        print(f"   🔄 Starting parallel expansion rounds...\n")
+
+        # ── ROUNDS 1+: Expand ALL agents together ───────────────────────────────
+        best_plan_overall = result
+        best_cost_overall = result.get('total_cost', float('inf'))
+        
+        if perf_monitor:
+            perf_monitor.start_step("Parallel Expansion Rounds")
+        
+        for round_num in range(max_rounds):
+            # ── INCREASE ALL LIMITS AT ONCE ────────────────────────────────────
+            print(f"   🔄 Round {round_num+1} (parallel): increasing all agents by {self.DELTA}")
+            for agent in agent_order:
+                limits[agent] += self.DELTA
+            
+            print(f"   📊 New limits: {limits}")
+            
+            # ── RE-FETCH ALL AGENTS (not cached, all fresh) ───────────────────
+            flights = self.flight_agent.search_flights(
+                origin=origin_code,
+                destination=dest_code,
+                departure_date=departure_date,
+                max_results=limits["flight"],
+            )
+            base = "INR"
+            for f in flights:
+                f.price = self.currency_converter.convert(f.price, f.currency, base)
+                f.currency = base
+
+            hotels = self.hotel_agent.search_accommodations(
+                destination=destination,
+                check_in=departure_date,
+                check_out=return_date,
+                max_results=limits["hotel"],
+            )
+            for h in hotels:
+                h.price_per_night = self.currency_converter.convert(h.price_per_night, h.currency, base)
+                h.currency = base
+
+            restaurants = self.restaurant_agent.search_restaurants(
+                location=destination,
+                dietary_restrictions=dietary or None,
+                max_results=limits["restaurant"],
+            )
+            for r in restaurants:
+                r.average_meal_cost = self.currency_converter.convert(r.average_meal_cost, r.currency, base)
+                r.currency = base
+
+            activities = self.activity_agent.search_activities(
+                location=destination,
+                interests=interests or None,
+                max_results=limits["activity"],
+            )
+            for a in activities:
+                if hasattr(a, "price"):
+                    a.price = self.currency_converter.convert(a.price, a.currency, base)
+                    a.currency = base
+
+            distance_km = self.ground_transport_agent.calculate_distance(
+                trip_details.get("origin_city", ""), destination)
+            ground = []
+            if distance_km <= 1000:
+                ground = self.ground_transport_agent.search_transport(
+                    origin=trip_details.get("origin_city", ""),
+                    destination=destination,
+                    transport_types=["taxi", "train", "bus"],
+                    max_results=limits["ground_transport"],
+                )
+
+            transport_all = sorted(
+                flights + ground,
+                key=lambda t: getattr(t, 'price', float('inf'))
+            )
+
+            # ── TRY TO OPTIMIZE ────────────────────────────────────────────────
+            result = self._optimize_with_langgraph(
+                transport_all, hotels, restaurants, activities,
+                num_days, budget, user_profile, trip_details,
+            ) if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE else \
+                self._optimize_with_ortools(
+                    transport_all, hotels, restaurants, activities,
+                    num_days, user_profile,
+                )
+
+            is_feasible = (
+                "error" not in result
+                and result.get("total_cost", float("inf")) <= budget
+            )
+            
+            current_cost = result.get('total_cost', float('inf'))
+            
+            # Track best plan
+            if current_cost < best_cost_overall:
+                best_plan_overall = result
+                best_cost_overall = current_cost
+                print(f"   💰 New best cost: {current_cost:.0f} INR")
+
+            if is_feasible:
+                print(f"   ✅ Parallel expansion: feasible plan found in Round {round_num+1}")
+                if perf_monitor:
+                    perf_monitor.finish_step("Parallel Expansion Rounds")
+                return result
+
+            print(f"   ⚠️  Cost: {current_cost:.0f} > Budget: {budget:.0f}, expanding all agents for next round…")
+
+        if perf_monitor:
+            perf_monitor.finish_step("Parallel Expansion Rounds")
+        
+        print("   ❌ Parallel expansion: no feasible plan after "
+            f"{max_rounds} rounds")
+        print(f"   💡 Best effort cost: INR {best_cost_overall:.0f} (budget: INR {budget:.0f})")
+        print(f"   📊 Shortfall: INR {best_cost_overall - budget:.0f}")
+        
+        # Return best effort if close enough (within 20% of budget)
+        if best_cost_overall <= budget * 1.2:
+            print(f"   ✓ Returning best effort (only {((best_cost_overall / budget - 1) * 100):.0f}% over)")
+            return best_plan_overall
+        
+        # Budget is impossible - suggest realistic budget
+        print(f"   💰 Suggested minimum budget: INR {best_cost_overall:.0f}")
+        return None
 
     # ============================================================================
     # OPTIMIZER SELECTION (Feature Flag)

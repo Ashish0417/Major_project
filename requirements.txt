@@ -29,3 +29,6 @@ pandas==2.2.2
 
 # === Structured Output ===
 pydantic==2.8.2
+
+# === Performance Monitoring ===
+psutil==6.0.0

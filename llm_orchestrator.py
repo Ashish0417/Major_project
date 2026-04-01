@@ -44,12 +44,104 @@ except ImportError:
     print(" LangGraph not available - using OR-Tools only")
 
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import random
 import logging
+import time
+import tracemalloc
+import psutil
+import os as os_module
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# PERFORMANCE MONITORING
+# ============================================================================
+
+@dataclass
+class PerformanceMetrics:
+    """Track timing and memory usage across generation steps"""
+    step_name: str
+    start_time: float = field(default_factory=time.time)
+    end_time: float = 0.0
+    start_memory_mb: float = 0.0
+    end_memory_mb: float = 0.0
+    
+    def __post_init__(self):
+        process = psutil.Process()
+        self.start_memory_mb = process.memory_info().rss / 1024 / 1024
+    
+    def finish(self):
+        """Mark step as finished and capture end metrics"""
+        self.end_time = time.time()
+        process = psutil.Process()
+        self.end_memory_mb = process.memory_info().rss / 1024 / 1024
+    
+    @property
+    def duration_seconds(self) -> float:
+        return self.end_time - self.start_time
+    
+    @property
+    def memory_delta_mb(self) -> float:
+        return self.end_memory_mb - self.start_memory_mb
+    
+    def __str__(self) -> str:
+        duration = f"{self.duration_seconds:.2f}s"
+        mem_usage = f"{self.memory_delta_mb:+.1f} MB"
+        return f"{self.step_name:30s} | {duration:>8s} | {mem_usage:>10s}"
+
+
+class PerformanceMonitor:
+    """Monitor and report on itinerary generation performance"""
+    
+    def __init__(self):
+        self.metrics: dict = {}
+        self.total_start_time = time.time()
+        process = psutil.Process()
+        self.total_start_memory = process.memory_info().rss / 1024 / 1024
+    
+    def start_step(self, step_name: str) -> PerformanceMetrics:
+        """Start timing a step"""
+        metric = PerformanceMetrics(step_name)
+        self.metrics[step_name] = metric
+        return metric
+    
+    def finish_step(self, step_name: str):
+        """Finish timing a step"""
+        if step_name in self.metrics:
+            self.metrics[step_name].finish()
+    
+    @property
+    def total_duration(self) -> float:
+        return time.time() - self.total_start_time
+    
+    @property
+    def total_memory_used(self) -> float:
+        """Total memory used from start to peak"""
+        process = psutil.Process()
+        current_memory = process.memory_info().rss / 1024 / 1024
+        return current_memory - self.total_start_memory
+    
+    def report(self):
+        """Display performance report"""
+        print("\n" + "="*80)
+        print("⏱️  PERFORMANCE METRICS")
+        print("="*80)
+        print(f"{'Step':<30} | {'Time':>8} | {'Memory Delta':>10}")
+        print("-" * 80)
+        
+        total_duration = 0
+        for step_name in sorted(self.metrics.keys()):
+            metric = self.metrics[step_name]
+            print(metric)
+            total_duration += metric.duration_seconds
+        
+        print("-" * 80)
+        print(f"{'TOTAL':<30} | {total_duration:>7.2f}s | {self.total_memory_used:>9.1f} MB")
+        print(f"{'Process Memory (Current)':<30} | {'':>8} | {psutil.Process().memory_info().rss / 1024 / 1024:>9.1f} MB")
+        print("="*80)
 
 
 class TravelItineraryOrchestrator:
@@ -214,6 +306,9 @@ Examples:
     def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None):
         """Generate complete optimized day-by-day itinerary"""
         
+        # Initialize performance monitoring
+        perf_monitor = PerformanceMonitor()
+        
         print("\n" + "="*80)
         print("🌍 GENERATING COMPLETE TRAVEL ITINERARY")
         print("="*80)
@@ -272,6 +367,7 @@ Examples:
         print("[1/6] 🔍 ANALYZING SEASONAL TRENDS")
         print("="*80)
         
+        perf_monitor.start_step("Trend Analysis")
         try:
             trends = self.trend_analyzer.get_seasonal_suggestions(destination, departure_date)
             if trends:
@@ -283,6 +379,8 @@ Examples:
         except Exception as e:
             print(f"   ⚠️ Trend analysis unavailable: {str(e)[:50]}")
             trends = []
+        finally:
+            perf_monitor.finish_step("Trend Analysis")
         
         # # [2/6] Search flights AND ground transport
         # print(f"\n{'='*80}")
@@ -621,6 +719,7 @@ Examples:
         print("[2-6/6] 🔍 SEARCH + OPTIMIZE (Sub-method 1)")
         print("="*80)
 
+        perf_monitor.start_step("Search & Fetch")
         optimized = self._fetch_with_expansion(
             origin_code=origin_code,
             dest_code=dest_code,
@@ -635,14 +734,18 @@ Examples:
             trip_details=trip_details,
             initial_counts={"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25},
             max_rounds=3,      # how many full cycles before giving up
+            perf_monitor=perf_monitor,  # Pass performance monitor for sub-step tracking
         )
+        perf_monitor.finish_step("Search & Fetch")
 
         if optimized is None or "error" in optimized:
             print("❌ Could not generate itinerary.")
+            perf_monitor.report()
             return
         
         if 'error' in optimized:
             print(f"   ❌ Optimization error: {optimized['error']}")
+            perf_monitor.report()
             return
         
         print(f"✅ Optimization complete!")
@@ -654,7 +757,12 @@ Examples:
         result = optimized  # LangGraph already includes return journey in optimization
         
         # Display day-by-day itinerary
+        perf_monitor.start_step("Display Itinerary")
         self.display_itinerary(result, trip_details)
+        perf_monitor.finish_step("Display Itinerary")
+        
+        # Show performance metrics
+        perf_monitor.report()
 
         return optimized
     
@@ -675,6 +783,7 @@ Examples:
         trip_details: dict,
         initial_counts: Optional[dict] = None,
         max_rounds: int = 3,
+        perf_monitor: Optional['PerformanceMonitor'] = None,
     ) -> Optional[dict]:
         """
         Sub-method 1 from the notes:
@@ -826,6 +935,9 @@ Examples:
         best_plan_overall = result  # Track best plan even if not feasible
         best_cost_overall = result.get('total_cost', float('inf'))
         
+        if perf_monitor:
+            perf_monitor.start_step("Expansion Rounds")
+        
         for round_num in range(max_rounds):
             for agent_idx, expanding_agent in enumerate(agent_order):
 
@@ -949,6 +1061,8 @@ Examples:
                 if is_feasible:
                     print(f"   ✅ Sub-method 1: feasible plan found "
                         f"(round {round_num+1}, agent '{expanding_agent}')")
+                    if perf_monitor:
+                        perf_monitor.finish_step("Expansion Rounds")
                     return result
 
                 print(f"   ⚠️  Cost: {current_cost:.0f} > Budget: {budget:.0f}, "
@@ -966,6 +1080,9 @@ Examples:
             f"{max_rounds} rounds")
         print(f"   💡 Best effort cost: INR {best_cost_overall:.0f} (budget: INR {budget:.0f})")
         print(f"   📊 Shortfall: INR {best_cost_overall - budget:.0f}")
+        
+        if perf_monitor:
+            perf_monitor.finish_step("Expansion Rounds")
         
         # Return best effort if close enough (within 20% of budget)
         if best_cost_overall <= budget * 1.2:

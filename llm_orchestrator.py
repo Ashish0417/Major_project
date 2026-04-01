@@ -267,11 +267,11 @@ Extract trip planning information. Respond ONLY with valid JSON:
 }}
 
 Examples:
-"Plan a trip from Bangalore to Paris from March 1 to March 7"
-→ {{"origin_city": "Bangalore", "destination_city": "Paris", "departure_date": "2026-03-01", "return_date": "2026-03-07", "num_days": 7}}
+"Plan a trip from Bangalore to Paris from April 8 to April 15"
+→ {{"origin_city": "Bangalore", "destination_city": "Paris", "departure_date": "2026-04-08", "return_date": "2026-04-15", "num_days": 7}}
 
-"I want to visit Tokyo for 5 days starting Feb 9 from Mumbai"
-→ {{"origin_city": "Mumbai", "destination_city": "Tokyo", "departure_date": "2026-02-09", "num_days": 5}}
+"I want to visit Tokyo for 5 days starting April 10 from Mumbai"
+→ {{"origin_city": "Mumbai", "destination_city": "Tokyo", "departure_date": "2026-04-10", "num_days": 5}}
 """
 
         try:
@@ -319,7 +319,9 @@ Examples:
         
         origin = trip_details.get('origin_city') or 'Mumbai'
         destination = trip_details.get('destination_city') or 'Tokyo'
-        departure_date = trip_details.get('departure_date') or '2026-03-20'
+        # Default to 7 days from today if no date provided
+        default_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+        departure_date = trip_details.get('departure_date') or default_date
         num_days = trip_details.get('num_days') or 7
         budget = trip_details.get('budget_inr') or 150000
         interests = trip_details.get('interests')
@@ -795,33 +797,107 @@ Examples:
         
         print("-" * 80)
         
-        # Choose the best valid result
-        if strategy_1_valid and strategy_2_valid:
-            if cost_1 <= cost_2:
-                optimized = result_onebyones
-                winner = "One-by-One"
-                savings = cost_2 - cost_1
+        # ── STRATEGY 3: Sequential generation ──────────────────────────────────
+        print(f"\n📊 STRATEGY 3: Sequential Generation (one-by-one evaluation)")
+        print("-" * 80)
+        perf_monitor.start_step("Sequential Generation")
+        result_sequential = self._fetch_with_sequential_generation(
+            origin_code=origin_code,
+            dest_code=dest_code,
+            destination=destination,
+            departure_date=departure_date,
+            return_date=return_date,
+            interests=interests,
+            dietary=dietary,
+            budget=budget,
+            num_days=num_days,
+            user_profile=user_profile,
+            trip_details=trip_details,
+            initial_step_size=1,  # Unused (method calculates min unique required)
+            perf_monitor=None,
+        )
+        perf_monitor.finish_step("Sequential Generation")
+
+        # ── COMPARISON (3-way) ─────────────────────────────────────────────────
+        print(f"\n{'='*80}")
+        print("📊 THREE-STRATEGY COMPARISON")
+        print("="*80)
+        
+        strategy_1_valid = (
+            result_onebyones is not None 
+            and "error" not in result_onebyones 
+            and result_onebyones.get("total_cost", float("inf")) <= budget
+        )
+        strategy_2_valid = (
+            result_parallel is not None 
+            and "error" not in result_parallel 
+            and result_parallel.get("total_cost", float("inf")) <= budget
+        )
+        strategy_3_valid = (
+            result_sequential is not None 
+            and "error" not in result_sequential 
+            and result_sequential.get("total_cost", float("inf")) <= budget
+        )
+        
+        cost_1 = result_onebyones.get('total_cost', float('inf')) if result_onebyones else float('inf')
+        cost_2 = result_parallel.get('total_cost', float('inf')) if result_parallel else float('inf')
+        cost_3 = result_sequential.get('total_cost', float('inf')) if result_sequential else float('inf')
+        
+        print(f"{'Strategy':<25} | {'Valid':<8} | {'Cost (INR)':<15} | {'vs Budget':<12}")
+        print("-" * 80)
+        
+        status_1 = "✅ Yes" if strategy_1_valid else "❌ No"
+        margin_1 = f"{((cost_1 / budget - 1) * 100):+.1f}%" if cost_1 < float('inf') else "N/A"
+        print(f"{'One-by-One Agents':<25} | {status_1:<8} | {cost_1:>13,.0f} | {margin_1:>12}")
+        
+        status_2 = "✅ Yes" if strategy_2_valid else "❌ No"
+        margin_2 = f"{((cost_2 / budget - 1) * 100):+.1f}%" if cost_2 < float('inf') else "N/A"
+        print(f"{'Parallel Expansion':<25} | {status_2:<8} | {cost_2:>13,.0f} | {margin_2:>12}")
+        
+        status_3 = "✅ Yes" if strategy_3_valid else "❌ No"
+        margin_3 = f"{((cost_3 / budget - 1) * 100):+.1f}%" if cost_3 < float('inf') else "N/A"
+        print(f"{'Sequential (Memory-Opt)':<25} | {status_3:<8} | {cost_3:>13,.0f} | {margin_3:>12}")
+        
+        print("-" * 80)
+        
+        # Find best valid result
+        valid_strategies = {
+            'One-by-One': (result_onebyones, cost_1) if strategy_1_valid else None,
+            'Parallel': (result_parallel, cost_2) if strategy_2_valid else None,
+            'Sequential': (result_sequential, cost_3) if strategy_3_valid else None,
+        }
+        valid_strategies = {k: v for k, v in valid_strategies.items() if v is not None}
+        
+        if valid_strategies:
+            # Get cheapest valid strategy
+            winner_name = min(valid_strategies.keys(), key=lambda k: valid_strategies[k][1])
+            optimized, winner_cost = valid_strategies[winner_name]
+            
+            if len(valid_strategies) > 1:
+                # Show savings vs other strategies
+                other_costs = [v[1] for k, v in valid_strategies.items() if k != winner_name]
+                avg_other = sum(other_costs) / len(other_costs)
+                savings = avg_other - winner_cost
+                print(f"🏆 WINNER: {winner_name} strategy (saves INR {savings:,.0f} on average)")
             else:
-                optimized = result_parallel
-                winner = "Parallel"
-                savings = cost_1 - cost_2
-            print(f"🏆 WINNER: {winner} strategy (saves INR {savings:,.0f})")
-        elif strategy_1_valid:
-            optimized = result_onebyones
-            print(f"🏆 WINNER: One-by-One strategy (feasible)")
-        elif strategy_2_valid:
-            optimized = result_parallel
-            print(f"🏆 WINNER: Parallel strategy (feasible)")
+                print(f"🏆 WINNER: {winner_name} strategy (feasible)")
         else:
-            # Neither strategy is feasible within budget - use best effort
-            if cost_1 < cost_2:
+            # All strategies over budget - use best effort (closest to budget)
+            costs_dict = {
+                'One-by-One': cost_1,
+                'Parallel': cost_2,
+                'Sequential': cost_3,
+            }
+            best_effort_name = min(costs_dict.keys(), key=lambda k: costs_dict[k])
+            if best_effort_name == 'One-by-One':
                 optimized = result_onebyones
-                overage = cost_1 - budget
-                print(f"⚠️  Both strategies over budget. Best effort: One-by-One (+INR {overage:,.0f})")
-            else:
+            elif best_effort_name == 'Parallel':
                 optimized = result_parallel
-                overage = cost_2 - budget
-                print(f"⚠️  Both strategies over budget. Best effort: Parallel (+INR {overage:,.0f})")
+            else:
+                optimized = result_sequential
+            
+            overage = costs_dict[best_effort_name] - budget
+            print(f"⚠️  All strategies over budget. Best effort: {best_effort_name} (+INR {overage:,.0f})")
 
         print("=" * 80)
 
@@ -1466,6 +1542,209 @@ Examples:
         print(f"   💰 Suggested minimum budget: INR {best_cost_overall:.0f}")
         return None
 
+    def _fetch_with_sequential_generation(
+        self,
+        origin_code: str,
+        dest_code: str,
+        destination: str,
+        departure_date: str,
+        return_date: str,
+        interests: Optional[list],
+        dietary: Optional[list],
+        budget: float,
+        num_days: int,
+        user_profile,
+        trip_details: dict,
+        initial_step_size: int = 1,
+        perf_monitor: Optional['PerformanceMonitor'] = None,
+    ) -> Optional[dict]:
+        """
+        Method 3: Sequential generation with early stopping (Memory-optimized).
+        
+        Strategy:
+        - Don't pre-fetch all best options at once
+        - Instead generate options one-by-one from each agent pool
+        - Evaluate each combination immediately
+        - Stop early when feasible plan found
+        - Lower memory footprint vs other strategies
+        
+        Process:
+        1. For restaurants & activities: Start with MINIMUM UNIQUE required (not just 1)
+           - Restaurants: num_days * meals_per_day (e.g., 3 days x 2 meals = 6)
+           - Activities: (num_days - 1) * activities_per_day + 1 (e.g., 2 days x 2 + 1 = 5)
+        2. For flights & hotels: Use reasonable initial_step_size (3-5)
+        3. Try optimization with current pool
+        4. If feasible found, return immediately (EARLY STOPPING)
+        5. Else, increment fetches and retry
+        
+        Advantage: First iteration tries realistic options counts, higher chance of success
+        """
+        
+        # ── PRE-CHECK: estimate minimum possible cost ──────────────────────────
+        def _estimate_min_cost(destination, departure_date, return_date, num_days):
+            MIN_FLIGHT_COST = 3000
+            MIN_HOTEL_PER_NIGHT = 800
+            MIN_RESTAURANT_PER_MEAL = 300
+            MIN_ACTIVITY_PER_DAY = 500
+            
+            min_total = (
+                MIN_FLIGHT_COST * 2
+                + MIN_HOTEL_PER_NIGHT * num_days
+                + MIN_RESTAURANT_PER_MEAL * 2 * num_days
+                + MIN_ACTIVITY_PER_DAY * num_days
+            )
+            return min_total
+
+        min_possible = _estimate_min_cost(destination, departure_date, return_date, num_days)
+        if min_possible > budget:
+            print(f"   ❌ Budget INR {budget:,.0f} is below estimated minimum "
+                f"INR {min_possible:,.0f} for this trip.")
+            return {"error": "budget_too_low", "min_required": min_possible}
+        
+        # ── Calculate minimum unique options required ───────────────────────────
+        MEALS_PER_DAY = 2
+        ACTIVITIES_PER_DAY = 2
+        
+        min_restaurants_needed = num_days * MEALS_PER_DAY
+        # Activities: last day gets only 1, other days get ACTIVITIES_PER_DAY
+        min_activities_needed = (num_days - 1) * ACTIVITIES_PER_DAY + 1
+        
+        print(f"   🔄 Sequential generation starting")
+        print(f"      Minimum unique restaurants needed: {min_restaurants_needed}")
+        print(f"      Minimum unique activities needed: {min_activities_needed}")
+        
+        # ── Consecutive fetch iterations ───────────────────────────────────────
+        best_plan_overall = None
+        best_cost_overall = float('inf')
+        # Start with MINIMAL for flights & hotels, realistic minimum for restaurants & activities
+        current_restaurant_count = min_restaurants_needed
+        current_activity_count = min_activities_needed
+        current_flight_count = 1    # Start minimal: 1 flight option
+        current_hotel_count = 1     # Start minimal: 1 hotel option
+        base = "INR"
+        
+        for iteration in range(5):  # Max 5 iterations (increasing diversity each time)
+            if current_restaurant_count > 25:  # Cap at 25 options
+                break
+            
+            print(f"\n   📍 Iteration {iteration + 1}:")
+            print(f"      Fetching: {current_flight_count} flights | {current_hotel_count} hotels | "
+                  f"{current_restaurant_count} restaurants | {current_activity_count} activities")
+            
+            # ── Fetch from each agent with current counts ──────────────────────
+            flights = self.flight_agent.search_flights(
+                origin=origin_code,
+                destination=dest_code,
+                departure_date=departure_date,
+                max_results=current_flight_count,
+            )
+            for f in flights:
+                f.price = self.currency_converter.convert(f.price, f.currency, base)
+                f.currency = base
+
+            hotels = self.hotel_agent.search_accommodations(
+                destination=destination,
+                check_in=departure_date,
+                check_out=return_date,
+                max_results=current_hotel_count,
+            )
+            for h in hotels:
+                h.price_per_night = self.currency_converter.convert(
+                    h.price_per_night, h.currency, base)
+                h.currency = base
+
+            restaurants = self.restaurant_agent.search_restaurants(
+                location=destination,
+                dietary_restrictions=dietary or None,
+                max_results=current_restaurant_count,
+            )
+            for r in restaurants:
+                r.average_meal_cost = self.currency_converter.convert(
+                    r.average_meal_cost, r.currency, base)
+                r.currency = base
+
+            activities = self.activity_agent.search_activities(
+                location=destination,
+                interests=interests or None,
+                max_results=current_activity_count,
+            )
+            for a in activities:
+                if hasattr(a, "price"):
+                    a.price = self.currency_converter.convert(a.price, a.currency, base)
+                    a.currency = base
+
+            distance_km = self.ground_transport_agent.calculate_distance(
+                trip_details.get("origin_city", ""), destination)
+            ground = []
+            if distance_km <= 1000:
+                ground = self.ground_transport_agent.search_transport(
+                    origin=trip_details.get("origin_city", ""),
+                    destination=destination,
+                    transport_types=["taxi", "train", "bus"],
+                    max_results=current_step_size,
+                )
+
+            transport_all = sorted(
+                flights + ground,
+                key=lambda t: getattr(t, 'price', float('inf'))
+            )
+            
+            print(f"      ✈️  {len(flights)} flights | 🏨 {len(hotels)} hotels | "
+                  f"🍽️  {len(restaurants)} restaurants | 🎭 {len(activities)} activities | "
+                  f"🚗 {len(ground)} ground transport")
+
+            # ── Try to optimize with current pool ───────────────────────────────
+            result = self._optimize_with_langgraph(
+                transport_all, hotels, restaurants, activities,
+                num_days, budget, user_profile, trip_details,
+            ) if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE else \
+                self._optimize_with_ortools(
+                    transport_all, hotels, restaurants, activities,
+                    num_days, user_profile,
+                )
+
+            is_feasible = (
+                "error" not in result
+                and result.get("total_cost", float("inf")) <= budget
+            )
+            
+            current_cost = result.get('total_cost', float('inf'))
+            
+            # Track best plan
+            if current_cost < best_cost_overall:
+                best_plan_overall = result
+                best_cost_overall = current_cost
+                print(f"      💰 New best: INR {current_cost:.0f}")
+
+            if is_feasible:
+                print(f"   ✅ Sequential generation: feasible plan found in iteration {iteration + 1}")
+                return result
+
+            print(f"      ⚠️  Cost: INR {current_cost:.0f} > Budget: INR {budget:.0f}, "
+                  f"expanding pools...")
+            
+            # ── Increment for next iteration ────────────────────────────────────
+            # Increase restaurant & activity by 2 each (to get more diversity)
+            # Increase flight & hotel by 1 each (minor adjustment)
+            current_restaurant_count += 3
+            current_activity_count += 2
+            current_flight_count += 1
+            current_hotel_count += 1
+
+        # ── End of iterations ──────────────────────────────────────────────────
+        print(f"   ❌ Sequential generation: no feasible plan after {iteration + 1} iterations")
+        print(f"   💡 Best effort cost: INR {best_cost_overall:.0f} (budget: INR {budget:.0f})")
+        print(f"   📊 Shortfall: INR {best_cost_overall - budget:.0f}")
+        
+        # Return best effort if close enough (within 20% of budget)
+        if best_cost_overall <= budget * 1.2:
+            print(f"   ✓ Returning best effort (only {((best_cost_overall / budget - 1) * 100):.0f}% over)")
+            return best_plan_overall
+        
+        # Budget is impossible
+        print(f"   💰 Suggested minimum budget: INR {best_cost_overall:.0f}")
+        return None
+
     # ============================================================================
     # OPTIMIZER SELECTION (Feature Flag)
     # ============================================================================
@@ -1791,27 +2070,33 @@ Examples:
             )
 
         # Build pools ─────────────────────────────────────────────────────
-        total_restaurants_needed = num_days * MEALS_PER_DAY
-        total_activities_needed  = num_days * ACTIVITIES_PER_DAY
-
-        # Use as many real items as available; cycle if the list is short
-        rest_pool = []
+        # ENSURE UNIQUE restaurants/activities per distribution (no repeats for same item on consecutive days)
+        
+        # Convert all restaurants to OptionCandidate format
+        unique_restaurants = []
         if restaurants:
-            src = list(restaurants)
-            while len(rest_pool) < total_restaurants_needed:
-                for i, r in enumerate(src):
-                    rest_pool.append(_to_option_candidate(r, 'restaurant', i))
-                    if len(rest_pool) >= total_restaurants_needed:
-                        break
-
-        act_pool = []
+            for i, r in enumerate(restaurants):
+                unique_restaurants.append(_to_option_candidate(r, 'restaurant', i))
+        
+        # Convert all activities to OptionCandidate format
+        unique_activities = []
         if activities:
-            src = list(activities)
-            while len(act_pool) < total_activities_needed:
-                for i, a in enumerate(src):
-                    act_pool.append(_to_option_candidate(a, 'activity', i))
-                    if len(act_pool) >= total_activities_needed:
-                        break
+            for i, a in enumerate(activities):
+                unique_activities.append(_to_option_candidate(a, 'activity', i))
+        
+        # Distribute restaurants using modulo (cycles through list without repeating same item consecutively)
+        rest_pool = []
+        for meal_slot in range(num_days * MEALS_PER_DAY):
+            if unique_restaurants:
+                selected = unique_restaurants[meal_slot % len(unique_restaurants)]
+                rest_pool.append(selected)
+        
+        # Distribute activities using modulo (cycles through list without repeating same item consecutively)
+        act_pool = []
+        for activity_slot in range((num_days - 1) * ACTIVITIES_PER_DAY + 1):
+            if unique_activities:
+                selected = unique_activities[activity_slot % len(unique_activities)]
+                act_pool.append(selected)
 
         # ------------------------------------------------------------------
         # 5.  Distribute restaurants  ── MEALS_PER_DAY per day

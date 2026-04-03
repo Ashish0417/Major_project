@@ -29,6 +29,7 @@ from trend_analyzer import TrendAnalyzer
 from user_profile import create_sample_profile, UserProfile, TripDates
 from currency_converter import CurrencyConverter, convert_to_inr
 from itinerary_enhancer import ItineraryEnhancer, display_enhanced_itinerary
+from history_manager import HistoryManager
 
 # Import new LangGraph optimizer (optional)
 try:
@@ -194,6 +195,10 @@ class TravelItineraryOrchestrator:
         self.activity_agent = ActivityAgent()
         self.trend_analyzer = TrendAnalyzer()
         self.currency_converter = CurrencyConverter()
+        self.history_manager = HistoryManager(
+            use_mongodb=os.getenv("USE_MONGODB", "false").lower() in ("1", "true", "yes"),
+            mongo_uri=os.getenv("MONGO_URI", "mongodb://localhost:27017")
+        )
         
         print(f"   💱 Currency converter ready ({len(self.currency_converter.rates)} currencies)")
         print(f"   🚕 Ground transport agent ready")
@@ -234,6 +239,19 @@ class TravelItineraryOrchestrator:
         except:
             return date_str
     
+    def get_user_context(self, user_id: str) -> Optional[str]:
+        """Retrieve user profile + trip history text for RAG augmentation."""
+        context = self.history_manager.get_user_context(user_id)
+        if not context:
+            return None
+
+        # Trim to safe prompt length and provide summary
+        max_chars = 3000
+        if len(context) > max_chars:
+            context = context[:max_chars] + "\n...(truncated historical context)"
+
+        return context
+
     def get_airport_code(self, city: str) -> Optional[str]:
         """Get airport code from city name"""
         if not city:
@@ -1712,6 +1730,13 @@ Examples:
             distance_km = self.ground_transport_agent.calculate_distance(
                 trip_details.get("origin_city", ""), destination)
             ground = []
+            current_step_size = max(
+                current_flight_count,
+                current_hotel_count,
+                current_restaurant_count,
+                current_activity_count,
+                5
+            )
             if distance_km <= 1000:
                 ground = self.ground_transport_agent.search_transport(
                     origin=trip_details.get("origin_city", ""),
@@ -3600,23 +3625,46 @@ Examples:
             print(f"   ⚠️ Transport error: {e}")
             self.display_itinerary(itinerary, trip_details)
     
-    def ask(self, query: str) -> str:
-        """Handle natural language queries"""
-        
+    def ask(self, query: str, user_id: Optional[str] = None) -> str:
+        """Handle natural language queries."""
+
+        user_id = user_id or os.getenv('DEFAULT_USER_ID', 'anonymous')
+        user_context = self.get_user_context(user_id)
+
+        if user_context:
+            print(f"🧾 Loaded context for user {user_id}:")
+            print(user_context)
+
         print("\n🧠 Understanding your request...")
-        
+
         # Check if it's a trip planning request
         if any(word in query.lower() for word in ['plan', 'trip', 'itinerary', 'travel', 'visit']):
             trip_details = self.extract_trip_details(query)
-            
+
             if trip_details.get('destination_city'):
-                self.generate_itinerary(trip_details)
+                result = self.generate_itinerary(trip_details)
+
+                # Save trip history entry for RAG
+                if user_id != 'anonymous':
+                    self.history_manager.store_trip_history(user_id, {
+                        'origin_city': trip_details.get('origin_city'),
+                        'destination': trip_details.get('destination_city'),
+                        'departure_date': trip_details.get('departure_date'),
+                        'return_date': trip_details.get('return_date'),
+                        'num_days': trip_details.get('num_days'),
+                        'budget_inr': trip_details.get('budget_inr'),
+                        'rating': None,
+                        'generated_at': datetime.now().isoformat(),
+                        'query': query,
+                        'result_summary': 'Itinerary generated'
+                    })
+
                 return "Itinerary generated above ↑"
             else:
                 return "❓ I need at least a destination city. Example: 'Plan a trip to Paris from Bangalore'"
-        
+
         return "❓ I specialize in planning complete trip itineraries. Try: 'Plan a trip from Bangalore to Paris for 5 days'"
-    
+
     def interactive(self):
         """Interactive mode"""
         

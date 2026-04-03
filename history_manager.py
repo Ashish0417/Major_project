@@ -25,7 +25,8 @@ class HistoryManager:
         self.memory_storage = {
             'users': {},
             'trips': {},
-            'preferences': {}
+            'preferences': {},
+            'feedback': {}
         }
 
         if self.use_mongodb:
@@ -110,6 +111,43 @@ class HistoryManager:
             print(f"Error retrieving trip history: {e}")
             return []
 
+    def store_feedback(self, user_id: str, query: str, rating: int, comment: str = "") -> bool:
+        """Store thumbs-up / thumbs-down feedback per user query."""
+        try:
+            feedback_entry = {
+                'user_id': user_id,
+                'query': query,
+                'rating': rating,
+                'comment': comment,
+                'created_at': datetime.now().isoformat()
+            }
+
+            if self.use_mongodb:
+                fdb = self.db['feedback']
+                fdb.insert_one(feedback_entry)
+            else:
+                if user_id not in self.memory_storage['feedback']:
+                    self.memory_storage['feedback'][user_id] = []
+                self.memory_storage['feedback'][user_id].append(feedback_entry)
+
+            print(f"Stored feedback for user {user_id}: rating={rating}")
+            return True
+        except Exception as e:
+            print(f"Error storing feedback: {e}")
+            return False
+
+    def get_feedback(self, user_id: str) -> List[Dict]:
+        """Retrieve user feedback history."""
+        try:
+            if self.use_mongodb:
+                fdb = self.db['feedback']
+                return list(fdb.find({'user_id': user_id}))
+            else:
+                return self.memory_storage['feedback'].get(user_id, [])
+        except Exception as e:
+            print(f"Error retrieving feedback: {e}")
+            return []
+
     def cluster_users(self, num_clusters: int = 5) -> Dict[str, List[str]]:
         """
         Cluster users based on preferences using K-Means
@@ -180,6 +218,23 @@ class HistoryManager:
         except Exception as e:
             print(f"Error clustering users: {e}")
             return {}
+
+    def get_user_context(self, user_id: str) -> Optional[str]:
+        """Build an in-context history summary for RAG prompt augmentation."""
+        profile = self.get_user_profile(user_id)
+        history = self.get_trip_history(user_id)
+
+        if not profile and not history:
+            return None
+
+        ctx_parts = []
+        if profile:
+            ctx_parts.append("**User Profile**:\n" + json.dumps(profile, indent=2))
+
+        if history:
+            ctx_parts.append("**Trip History**:\n" + json.dumps(history, indent=2))
+
+        return "\n\n".join(ctx_parts)
 
     def collaborative_filtering(self, user_id: str, top_n: int = 5) -> List[Dict]:
         """

@@ -11,7 +11,7 @@ NEW: LangGraph optimizer for parallel exploration with dynamic constraints
 """
 
 import os
-from typing import Optional, Union
+from typing import Optional, Union, Tuple, List
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -43,6 +43,18 @@ try:
 except ImportError:
     LANGGRAPH_AVAILABLE = False
     print(" LangGraph not available - using OR-Tools only")
+
+# Import itinerary selector for multi-itinerary ranking and selection
+try:
+    from itinerary_selector import (
+        ItineraryRanker,
+        ItinerarySelector,
+        SaveItineraryHandler
+    )
+    SELECTOR_AVAILABLE = True
+except ImportError:
+    SELECTOR_AVAILABLE = False
+    print("⚠️  Itinerary selector not available")
 
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
@@ -435,338 +447,7 @@ Examples:
         finally:
             perf_monitor.finish_step("Trend Analysis")
         
-        # # [2/6] Search flights AND ground transport
-        # print(f"\n{'='*80}")
-        # print("[2/6] ✈️🚕 SEARCHING FLIGHTS & GROUND TRANSPORT")
-        # print("="*80)
-        # print(f"   Route: {origin_code} → {dest_code}")
-        # print(f"   Outbound: {departure_date}")
         
-        # # Calculate distance to determine if ground transport is viable
-        # distance_km = self.ground_transport_agent.calculate_distance(origin, destination)
-        
-        # # Search for flights
-        # print(f"\n   ✈️ Searching flights...")
-        # flights = self.flight_agent.search_flights(
-        #     origin=origin_code,
-        #     destination=dest_code,
-        #     departure_date=departure_date,
-        #     max_results=10
-        # )
-        
-        # if flights:
-        #     print(f"   ✅ Found {len(flights)} flights")
-        #     cheapest_flight = min(flights, key=lambda f: self.currency_converter.convert(f.price, f.currency, 'INR'))
-        #     cheapest_flight_inr = self.currency_converter.convert(cheapest_flight.price, cheapest_flight.currency, 'INR')
-        #     print(f"   💰 Cheapest flight: INR {cheapest_flight_inr:,.0f}")
-        # else:
-        #     print("   ⚠️ No flights found")
-        #     flights = []
-        #     cheapest_flight_inr = float('inf')
-        
-        # # Search for ground transport (if distance is reasonable)
-        # ground_transport_options = []
-        # if distance_km <= 1000:  # Only search ground transport for <= 1000km
-        #     print(f"\n   🚕 Searching ground transport (distance: {distance_km:.0f}km)...")
-        #     ground_transport_options = self.ground_transport_agent.search_transport(
-        #         origin=origin,
-        #         destination=destination,
-        #         transport_types=['taxi', 'train', 'bus'],
-        #         max_results=6
-        #     )
-            
-        #     if ground_transport_options:
-        #         print(f"   ✅ Found {len(ground_transport_options)} ground transport options")
-        #         cheapest_ground = min(ground_transport_options, key=lambda t: t.price)
-        #         print(f"   💰 Cheapest ground: INR {cheapest_ground.price:,.0f} ({cheapest_ground.type})")
-                
-        #         # Compare with flight
-        #         if flights:
-        #             comparison = self.ground_transport_agent.compare_with_flight(
-        #                 cheapest_ground, 
-        #                 cheapest_flight_inr
-        #             )
-                    
-        #             print(f"\n   📊 COMPARISON:")
-        #             print(f"   {'─'*70}")
-        #             if comparison['recommendation'] == 'ground_transport':
-        #                 print(f"   💡 RECOMMENDED: Ground Transport ({cheapest_ground.type})")
-        #                 print(f"   ✅ Save INR {comparison['savings']:,.0f} ({comparison['savings_pct']:.0f}%)")
-        #                 print(f"   ⏱️  Extra time: {comparison['time_diff_minutes'] // 60}h {comparison['time_diff_minutes'] % 60}m")
-        #                 print(f"   📝 {comparison['reason']}")
-        #             else:
-        #                 print(f"   💡 RECOMMENDED: Flight")
-        #                 print(f"   ⏱️  Save time: {abs(comparison['time_diff_minutes']) // 60}h {abs(comparison['time_diff_minutes']) % 60}m")
-        #                 print(f"   📝 {comparison['reason']}")
-        #             print(f"   {'─'*70}")
-        # else:
-        #     print(f"\n   ℹ️  Distance too far ({distance_km:.0f}km) - skipping ground transport")
-        
-        # # Show top options from each category
-        # print(f"\n   📋 TOP OPTIONS:")
-        # print(f"   {'─'*70}")
-        
-        # if flights:
-        #     print(f"   ✈️ FLIGHTS:")
-        #     for i, f in enumerate(flights[:3], 1):
-        #         hrs = f.duration_minutes // 60
-        #         mins = f.duration_minutes % 60
-        #         original_price = f"{f.currency} {f.price:,.0f}"
-        #         inr_price = self.currency_converter.convert(f.price, f.currency, 'INR')
-        #         print(f"      {i}. {f.carrier} {f.flight_id}: {original_price} (≈ INR {inr_price:,.0f}) ({hrs}h {mins}m)")
-        
-        # if ground_transport_options:
-        #     print(f"\n   🚕 GROUND TRANSPORT:")
-        #     for i, t in enumerate(ground_transport_options[:3], 1):
-        #         hrs = t.duration_minutes // 60
-        #         mins = t.duration_minutes % 60
-        #         print(f"      {i}. {t.type.title()} ({t.provider}): INR {t.price:,.0f} ({hrs}h {mins}m)")
-        
-
-        # # Pass ALL options to LangGraph — it will pick the cheapest combination
-        # # that fits within the total budget. No pre-selection here.
-        # # selected_transport = flights + ground_transport_options
-
-        # # if not selected_transport:
-        # #     print("\n   ⚠️ No transport options found (will use mock data)")
-        # # else:
-        # #     n_flights = len(flights)
-        # #     n_ground  = len(ground_transport_options)
-        # #     print(f"\n   ✅ Passing ALL {len(selected_transport)} transport options "
-        # #           f"to LangGraph for dynamic budget-aware selection")
-        # #     if n_flights:
-        # #         cheapest_f = min(
-        # #             self.currency_converter.convert(f.price, f.currency, 'INR')
-        # #             for f in flights
-        # #         )
-        # #         print(f"      ✈️  {n_flights} flights  — cheapest INR {cheapest_f:,.0f}")
-        # #     if n_ground:
-        # #         cheapest_g = min(t.price for t in ground_transport_options)
-        # #         print(f"      🚕  {n_ground} ground   — cheapest INR {cheapest_g:,.0f}")
-        # #     print(f"      💡 LangGraph will choose based on total budget INR {budget:,.0f}")
-        # # ── Outbound: all options together ────────────────────────────────
-        # selected_transport = flights + ground_transport_options
-
-        # # ── Return: search reverse route ──────────────────────────────────
-        # dep_date_obj  = datetime.strptime(departure_date, '%Y-%m-%d')
-        # return_date   = (dep_date_obj + timedelta(days=num_days - 1)).strftime('%Y-%m-%d')
-
-        # print(f"\n   🔄 Searching RETURN transport ({dest_code} → {origin_code}) "
-        #       f"on {return_date}...")
-
-        # return_flights = self.flight_agent.search_flights(
-        #     origin=dest_code,
-        #     destination=origin_code,
-        #     departure_date=return_date,
-        #     max_results=10
-        # )
-
-        # return_ground = []
-        # if distance_km <= 1000:
-        #     return_ground = self.ground_transport_agent.search_transport(
-        #         origin=destination,
-        #         destination=origin,
-        #         transport_types=['taxi', 'train', 'bus'],
-        #         max_results=6
-        #     )
-
-        # # Convert return flight prices to INR
-        # for f in return_flights:
-        #     f.price    = self.currency_converter.convert(f.price, f.currency, 'INR')
-        #     f.currency = 'INR'
-        #     f.is_return = True   # flag for display + day placement
-
-        # for t in return_ground:
-        #     t.is_return = True
-
-        # return_transport_options = return_flights + return_ground
-
-        # if return_transport_options:
-        #     cheapest_ret = min(return_transport_options,
-        #                        key=lambda t: getattr(t, 'price', 0))
-        #     print(f"   ✅ Found {len(return_transport_options)} return options — "
-        #           f"cheapest INR {cheapest_ret.price:,.0f}")
-        # else:
-        #     print("   ⚠️ No return options found — will use mock")
-
-        # # Store on trip_details so other methods can access
-        # trip_details['_return_transport_options'] = return_transport_options
-
-        # if not selected_transport:
-        #     print("\n   ⚠️ No outbound transport found (will use mock data)")
-        # else:
-        #     cheapest_out = min(
-        #         self.currency_converter.convert(
-        #             getattr(t, 'price', 0), getattr(t, 'currency', 'INR'), 'INR'
-        #         )
-        #         for t in selected_transport
-        #     )
-        #     cheapest_ret_cost = (
-        #         min(getattr(t, 'price', 0) for t in return_transport_options)
-        #         if return_transport_options else 0
-        #     )
-        #     print(f"\n   💡 LangGraph will optimise outbound + return + stay within "
-        #           f"total budget INR {budget:,.0f}")
-        #     print(f"      Cheapest outbound: INR {cheapest_out:,.0f}")
-        #     print(f"      Cheapest return:   INR {cheapest_ret_cost:,.0f}")
-        #     print(f"      Remaining for hotel/food/activities: "
-        #           f"INR {budget - cheapest_out - cheapest_ret_cost:,.0f}")
-
-        
-        
-        # # [3/6] Search accommodations
-        # print(f"\n{'='*80}")
-        # print("[3/6] 🏨 SEARCHING ACCOMMODATIONS")
-        # print("="*80)
-        # print(f"   Location: {destination}")
-        # print(f"   Check-in: {departure_date}, Check-out: {return_date}")
-        
-        # hotels = self.hotel_agent.search_accommodations(
-        #     destination=destination,
-        #     check_in=departure_date,
-        #     check_out=return_date,
-        #     max_results=10
-        # )
-        
-        # if hotels:
-        #     print(f"✅ Found {len(hotels)} accommodations")
-        #     for i, h in enumerate(hotels[:3], 1):
-        #         original_price = f"{h.currency} {h.price_per_night:,.0f}"
-        #         inr_price = self.currency_converter.convert(h.price_per_night, h.currency, 'INR')
-        #         print(f"   {i}. {h.name}: {original_price}/night (≈ INR {inr_price:,.0f}) [{h.type}]")
-        # else:
-        #     print("   ⚠️ No accommodations found (will use mock data)")
-        #     hotels = []
-        
-        # # [4/6] Search restaurants
-        # print(f"\n{'='*80}")
-        # print("[4/6] 🍽️  SEARCHING RESTAURANTS")
-        # print("="*80)
-        # print(f"   Location: {destination}")
-        # if dietary:
-        #     print(f"   Dietary: {', '.join(dietary)}")
-        
-        # restaurants = self.restaurant_agent.search_restaurants(
-        #     location=destination,
-        #     dietary_restrictions=dietary if dietary else None,
-        #     max_results=20
-        # )
-        
-        # if restaurants:
-        #     print(f"✅ Found {len(restaurants)} restaurants")
-        #     restaurants = self.restaurant_agent.rank_restaurants(restaurants)
-        #     for i, r in enumerate(restaurants[:3], 1):
-        #         print(f"   {i}. {r.name}: {r.cuisine_type}")
-        # else:
-        #     print("   ⚠️ No restaurants found (will use mock data)")
-        #     restaurants = []
-        
-        # # [5/6] Search activities
-        # print(f"\n{'='*80}")
-        # print("[5/6] 🎭 SEARCHING ACTIVITIES")
-        # print("="*80)
-        # print(f"   Location: {destination}")
-        # print(f"   Interests: {', '.join(interests)}")
-        
-        # activities = self.activity_agent.search_activities(
-        #     location=destination,
-        #     interests=interests if interests else None,
-        #     max_results=25
-        # )
-        
-        # if activities:
-        #     print(f"✅ Found {len(activities)} activities")
-        #     for i, a in enumerate(activities[:3], 1):
-        #         print(f"   {i}. {a.name}: {a.description[:50]}...")
-        # else:
-        #     print("   ⚠️ No activities found (will use mock data)")
-        #     activities = []
-        
-        # # [6/6] Optimize itinerary
-        # print(f"\n{'='*80}")
-        # print("[6/6] 🧮 OPTIMIZING ITINERARY")
-        # print("="*80)
-        
-        # # Convert all prices to base currency (INR) for optimization
-        # print("   💱 Converting all prices to INR...")
-        # base_currency = 'INR'
-        
-        # # Convert transport options (only the selected type)
-        # transport_converted = []
-        # for transport in selected_transport:
-        #     if hasattr(transport, 'price') and hasattr(transport, 'currency'):
-        #         # Check if it's a flight or ground transport
-        #         if hasattr(transport, 'carrier'):  # It's a flight
-        #             converted_price = self.currency_converter.convert(
-        #                 transport.price, 
-        #                 transport.currency, 
-        #                 base_currency
-        #             )
-        #             transport.price = converted_price
-        #             transport.currency = base_currency
-        #         else:  # It's ground transport (already in INR)
-        #             pass  # Already in INR
-                
-        #         transport_converted.append(transport)
-        
-        # print(f"   ✅ Using {len(transport_converted)} {transport_converted[0].item_type if transport_converted else 'transport'} options")
-        # # Convert hotels
-        # hotels_converted = []
-        # for hotel in hotels:
-        #     converted_price = self.currency_converter.convert(
-        #         hotel.price_per_night,
-        #         hotel.currency,
-        #         base_currency
-        #     )
-        #     hotel.price_per_night = converted_price
-        #     hotel.currency = base_currency
-        #     hotels_converted.append(hotel)
-        
-        # # Convert restaurants
-        # restaurants_converted = []
-        # for restaurant in restaurants:
-        #     converted_price = self.currency_converter.convert(
-        #         restaurant.average_meal_cost,
-        #         restaurant.currency,
-        #         base_currency
-        #     )
-        #     restaurant.average_meal_cost = converted_price
-        #     restaurant.currency = base_currency
-        #     restaurants_converted.append(restaurant)
-        
-        # # Convert activities
-        # activities_converted = []
-        # for activity in activities:
-        #     if hasattr(activity, 'cost') and hasattr(activity, 'currency'):
-        #         converted_price = self.currency_converter.convert(
-        #             activity.price,
-        #             activity.currency,
-        #             base_currency
-        #         )
-        #         activity.price = converted_price
-        #         activity.currency = base_currency
-        #     activities_converted.append(activity)
-        
-        # print(f"   ✅ All prices converted to {base_currency}")
-        
-        # # ======================================================================
-        # # FEATURE FLAG: Choose optimizer (OR-Tools vs LangGraph)
-        # # ======================================================================
-        
-        # if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE:
-        #     # NEW: Use LangGraph optimizer with dynamic constraints
-        #     optimized = self._optimize_with_langgraph(
-        #         transport_converted, hotels_converted, restaurants_converted,
-        #         activities_converted, num_days, budget, user_profile, trip_details
-        #     )
-        # else:
-        #     # EXISTING: Use OR-Tools optimizer with hardcoded ratios
-        #     optimized = self._optimize_with_ortools(
-        #         transport_converted, hotels_converted, restaurants_converted,
-        #         activities_converted, num_days, user_profile
-        #     )
-
-        # In generate_itinerary(), replace steps [2/6]..[6/6] with:
 
         print(f"\n{'='*80}")
         print("[2-6/6] 🔍 SEARCH + OPTIMIZE (Comparing Two Expansion Strategies)")
@@ -910,59 +591,42 @@ Examples:
         print(f"{'Sequential (Memory-Opt)':<25} | {status_3:<8} | {cost_3:>13,.0f} | {margin_3:>12}")
         
         print("-" * 80)
+
+        print("=" * 80)
+        print("\n🎯 ITINERARY SELECTION")
+        print("="*80)
         
-        # Find best valid result
-        valid_strategies = {
-            'One-by-One': (result_onebyones, cost_1) if strategy_1_valid else None,
-            'Parallel': (result_parallel, cost_2) if strategy_2_valid else None,
-            'Sequential': (result_sequential, cost_3) if strategy_3_valid else None,
-        }
-        valid_strategies = {k: v for k, v in valid_strategies.items() if v is not None}
+        # Use new selection system to rank and let user pick top 3
+        user_id = trip_details.get('user_id', 'anonymous')
+        selection_result = self.handle_itinerary_selection(
+            result_onebyones,
+            result_parallel,
+            result_sequential,
+            trip_details,
+            user_id
+        )
         
-        if valid_strategies:
-            # Get cheapest valid strategy
-            winner_name = min(valid_strategies.keys(), key=lambda k: valid_strategies[k][1])
-            optimized, winner_cost = valid_strategies[winner_name]
-            
-            if len(valid_strategies) > 1:
-                # Show savings vs other strategies
-                other_costs = [v[1] for k, v in valid_strategies.items() if k != winner_name]
-                avg_other = sum(other_costs) / len(other_costs)
-                savings = avg_other - winner_cost
-                print(f"🏆 WINNER: {winner_name} strategy (saves INR {savings:,.0f} on average)")
-            else:
-                print(f"🏆 WINNER: {winner_name} strategy (feasible)")
-        else:
-            # All strategies over budget - use best effort (closest to budget)
-            costs_dict = {
-                'One-by-One': cost_1,
-                'Parallel': cost_2,
-                'Sequential': cost_3,
-            }
-            best_effort_name = min(costs_dict.keys(), key=lambda k: costs_dict[k])
-            if best_effort_name == 'One-by-One':
-                optimized = result_onebyones
-            elif best_effort_name == 'Parallel':
-                optimized = result_parallel
-            else:
-                optimized = result_sequential
-            
-            overage = costs_dict[best_effort_name] - budget
-            print(f"⚠️  All strategies over budget. Best effort: {best_effort_name} (+INR {overage:,.0f})")
+        if selection_result is None:
+            print("\n❌ No itinerary selected. Exiting.")
+            perf_monitor.report()
+            return None
+        
+        strategy_name, optimized = selection_result
 
         print("=" * 80)
 
         if optimized is None or "error" in optimized:
             print("❌ Could not generate itinerary.")
             perf_monitor.report()
-            return
+            return None
         
         if 'error' in optimized:
             print(f"   ❌ Optimization error: {optimized['error']}")
             perf_monitor.report()
-            return
+            return None
         
-        print(f"✅ Optimization complete!")
+        print(f"✅ Selected itinerary prepared for display!")
+        print(f"   Strategy: {strategy_name}")
         print(f"   Total cost: {optimized.get('currency', 'INR')} {optimized.get('total_cost', 0):,.2f}")
         print(f"   Budget remaining: INR {budget - optimized.get('total_cost', 0):,.2f}")
         
@@ -980,7 +644,7 @@ Examples:
 
         return optimized
     
-    # orchestrator.py — add this method to TravelItineraryOrchestrator
+    
 
     def _fetch_with_expansion(
         self,
@@ -3856,6 +3520,139 @@ Examples:
         except Exception as e:
             print(f"   ⚠️ Transport error: {e}")
             self.display_itinerary(itinerary, trip_details)
+    
+    # ============================================================================
+    # ITINERARY SELECTION & STORAGE (NEW)
+    # ============================================================================
+    
+    def handle_itinerary_selection(
+        self,
+        result_onebyones: Optional[dict],
+        result_parallel: Optional[dict],
+        result_sequential: Optional[dict],
+        trip_details: dict,
+        user_id: str = "anonymous"
+    ) -> Optional[Tuple[str, dict]]:
+        """
+        Handle ranking and user selection of top 3 itineraries.
+        
+        Converts results from 3 strategies into a flat list format for ranking:
+        - One-by-One strategy results (may be 1 or more itineraries)
+        - Parallel strategy results (may be 1 or more itineraries)
+        - Sequential strategy results (may be 1 or more itineraries)
+        
+        Args:
+            result_onebyones: Itinerary(ies) from one-by-one strategy
+            result_parallel: Itinerary(ies) from parallel strategy
+            result_sequential: Itinerary(ies) from sequential strategy
+            trip_details: Trip details dict
+            user_id: User ID for storage
+        
+        Returns:
+            (selected_strategy, selected_itinerary) or None if cancelled
+        """
+        if not SELECTOR_AVAILABLE:
+            print("⚠️  Itinerary selector not available - returning best itinerary")
+            # Fallback: return the best one
+            candidates = [
+                ("One-by-One", result_onebyones),
+                ("Parallel", result_parallel),
+                ("Sequential", result_sequential),
+            ]
+            valid = [(name, it) for name, it in candidates if it and "error" not in it]
+            if valid:
+                return valid[0]
+            return None
+        
+        # ── Convert results to flat list format ────────────────────────────────
+        # Currently each strategy returns single itinerary
+        # Future: each strategy could return list of itineraries
+        # Format: [('Strategy #1', {...}), ('Strategy #2', {...}), ...]
+        
+        flat_itineraries = []
+        strategy_counter = {'One-by-One': 1, 'Parallel': 1, 'Sequential': 1}
+        
+        # Add One-by-One result(s)
+        if result_onebyones and "error" not in result_onebyones:
+            label = f"One-by-One #{strategy_counter['One-by-One']}"
+            flat_itineraries.append((label, result_onebyones))
+            strategy_counter['One-by-One'] += 1
+        
+        # Add Parallel result(s)
+        if result_parallel and "error" not in result_parallel:
+            label = f"Parallel #{strategy_counter['Parallel']}"
+            flat_itineraries.append((label, result_parallel))
+            strategy_counter['Parallel'] += 1
+        
+        # Add Sequential result(s)
+        if result_sequential and "error" not in result_sequential:
+            label = f"Sequential #{strategy_counter['Sequential']}"
+            flat_itineraries.append((label, result_sequential))
+            strategy_counter['Sequential'] += 1
+        
+        if not flat_itineraries:
+            print("❌ No valid itineraries to select from")
+            return None
+        
+        budget = trip_details.get('budget_inr', 150000)
+        
+        # Rank itineraries using flat list
+        ranker = ItineraryRanker(budget)
+        ranked = ranker.rank_itineraries(flat_itineraries)
+        
+        if not ranked:
+            print("❌ No valid itineraries after ranking")
+            return None
+        
+        # Display and get selection
+        selector = ItinerarySelector()
+        selected = selector.display_and_select(ranked, budget, trip_details)
+        
+        if selected:
+            strategy_name, full_itinerary = selected
+            # Display the selected itinerary
+            selector.display_selected(strategy_name, full_itinerary)
+            
+            # Save to database
+            self.save_selected_itinerary(strategy_name, full_itinerary, trip_details, user_id)
+            
+            return (strategy_name, full_itinerary)
+        
+        return None
+    
+    def save_selected_itinerary(
+        self,
+        strategy_name: str,
+        itinerary: dict,
+        trip_details: dict,
+        user_id: str
+    ) -> bool:
+        """Save selected itinerary to database"""
+        try:
+            # Prepare data for storage
+            storage_data = SaveItineraryHandler.prepare_for_storage(
+                strategy_name,
+                itinerary,
+                trip_details,
+                user_id
+            )
+            
+            # Store in history manager
+            success = self.history_manager.store_itinerary(user_id, storage_data)
+            
+            if success:
+                print(f"\n✅ Itinerary saved successfully!")
+                print(f"   Strategy: {strategy_name}")
+                print(f"   User: {user_id}")
+                print(f"   Cost: ₹{storage_data['total_cost_inr']:,.2f}")
+            else:
+                print("\n⚠️  Could not save itinerary to database")
+            
+            return success
+        
+        except Exception as e:
+            print(f"\n❌ Error saving itinerary: {e}")
+            return False
     
     def ask(self, query: str, user_id: Optional[str] = None) -> str:
         """Handle natural language queries."""

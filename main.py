@@ -49,7 +49,10 @@ class TravelItineraryGenerator:
         self.accommodation_agent = AccommodationAgent()
         self.restaurant_agent = RestaurantAgent()
         self.activity_agent = ActivityAgent(use_mock=True)
-        self.history_manager = HistoryManager(use_mongodb=False)
+        self.history_manager = HistoryManager(
+            use_mongodb=True,
+            mongo_uri=os.getenv("MONGO_URI", "mongodb://localhost:27017")
+        )
         self.trend_analyzer = TrendAnalyzer()
 
         print("  ✅ All agents initialized!")

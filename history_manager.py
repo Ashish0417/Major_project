@@ -111,6 +111,162 @@ class HistoryManager:
             print(f"Error retrieving trip history: {e}")
             return []
 
+    def store_itinerary(self, user_id: str, itinerary_data: Dict[str, Any]) -> bool:
+        """Store complete detailed itinerary with all daily activities and costs."""
+        try:
+            itinerary_entry = {
+                'user_id': user_id,
+                'destination': itinerary_data.get('destination'),
+                'origin': itinerary_data.get('origin'),
+                'departure_date': itinerary_data.get('departure_date'),
+                'return_date': itinerary_data.get('return_date'),
+                'num_days': itinerary_data.get('num_days'),
+                'total_budget_inr': itinerary_data.get('total_budget_inr'),
+                'total_cost_inr': itinerary_data.get('total_cost_inr'),
+                'optimization_score': itinerary_data.get('optimization_score'),
+                'combinations_evaluated': itinerary_data.get('combinations_evaluated'),
+                'daily_schedules': itinerary_data.get('daily_schedules', []),
+                'created_at': datetime.now().isoformat(),
+                'query': itinerary_data.get('query', ''),
+                'interests': itinerary_data.get('interests', []),
+                'dietary_restrictions': itinerary_data.get('dietary_restrictions', [])
+            }
+
+            if self.use_mongodb:
+                itineraries = self.db['itineraries']
+                result = itineraries.insert_one(itinerary_entry)
+                print(f"Stored itinerary for user {user_id} (ID: {result.inserted_id})")
+            else:
+                if 'itineraries' not in self.memory_storage:
+                    self.memory_storage['itineraries'] = {}
+                if user_id not in self.memory_storage['itineraries']:
+                    self.memory_storage['itineraries'][user_id] = []
+                self.memory_storage['itineraries'][user_id].append(itinerary_entry)
+                print(f"Stored itinerary for user {user_id} in memory")
+
+            return True
+        except Exception as e:
+            print(f"Error storing itinerary: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def get_itineraries(self, user_id: str) -> List[Dict]:
+        """Get all itineraries for a user."""
+        try:
+            if self.use_mongodb:
+                itineraries = self.db['itineraries']
+                return list(itineraries.find({'user_id': user_id}))
+            else:
+                if 'itineraries' in self.memory_storage:
+                    return self.memory_storage['itineraries'].get(user_id, [])
+                return []
+        except Exception as e:
+            print(f"Error retrieving itineraries: {e}")
+            return []
+
+    def store_itinerary_output(self, user_id: str, itinerary_text: str, trip_info: Dict[str, Any] = None) -> bool:
+        """Store complete itinerary output as raw text (day-by-day format)."""
+        try:
+            itinerary_entry = {
+                'user_id': user_id,
+                'output_text': itinerary_text,
+                'trip_info': trip_info or {},
+                'created_at': datetime.now().isoformat(),
+                'text_length': len(itinerary_text)
+            }
+
+            if self.use_mongodb:
+                output_coll = self.db['itinerary_outputs']
+                result = output_coll.insert_one(itinerary_entry)
+                print(f"Stored itinerary output for user {user_id} ({len(itinerary_text)} bytes)")
+            else:
+                if 'itinerary_outputs' not in self.memory_storage:
+                    self.memory_storage['itinerary_outputs'] = {}
+                if user_id not in self.memory_storage['itinerary_outputs']:
+                    self.memory_storage['itinerary_outputs'][user_id] = []
+                self.memory_storage['itinerary_outputs'][user_id].append(itinerary_entry)
+                print(f"Stored itinerary output for user {user_id} in memory")
+
+            return True
+        except Exception as e:
+            print(f"Error storing itinerary output: {e}")
+            return False
+
+    def get_itinerary_outputs(self, user_id: str) -> List[Dict]:
+        """Get all stored itinerary outputs for a user."""
+        try:
+            if self.use_mongodb:
+                output_coll = self.db['itinerary_outputs']
+                return list(output_coll.find({'user_id': user_id}))
+            else:
+                if 'itinerary_outputs' in self.memory_storage:
+                    return self.memory_storage['itinerary_outputs'].get(user_id, [])
+                return []
+        except Exception as e:
+            print(f"Error retrieving itinerary outputs: {e}")
+            return []
+
+    def get_latest_itinerary(self, user_id: str) -> Optional[Dict]:
+        """Get the most recent itinerary for a user."""
+        try:
+            if self.use_mongodb:
+                itineraries = self.db['itineraries']
+                return itineraries.find_one(
+                    {'user_id': user_id},
+                    sort=[('created_at', -1)]
+                )
+            else:
+                itineraries = self.get_itineraries(user_id)
+                if itineraries:
+                    return sorted(itineraries, key=lambda x: x['created_at'], reverse=True)[0]
+                return None
+        except Exception as e:
+            print(f"Error retrieving latest itinerary: {e}")
+            return None
+
+    def store_conversation(self, user_id: str, query: str, response: str, trip_data: Dict[str, Any] = None) -> bool:
+        """Store user question and AI response for conversation history."""
+        try:
+            conversation_entry = {
+                'user_id': user_id,
+                'query': query,
+                'response': response,
+                'trip_data': trip_data or {},
+                'created_at': datetime.now().isoformat()
+            }
+
+            if self.use_mongodb:
+                conv = self.db['conversations']
+                conv.insert_one(conversation_entry)
+            else:
+                # Store in memory with a simple list
+                if 'conversations' not in self.memory_storage:
+                    self.memory_storage['conversations'] = {}
+                if user_id not in self.memory_storage['conversations']:
+                    self.memory_storage['conversations'][user_id] = []
+                self.memory_storage['conversations'][user_id].append(conversation_entry)
+
+            print(f"Stored conversation for user {user_id}")
+            return True
+        except Exception as e:
+            print(f"Error storing conversation: {e}")
+            return False
+
+    def get_conversation_history(self, user_id: str) -> List[Dict]:
+        """Get conversation history for a user."""
+        try:
+            if self.use_mongodb:
+                conv = self.db['conversations']
+                return list(conv.find({'user_id': user_id}))
+            else:
+                if 'conversations' in self.memory_storage:
+                    return self.memory_storage['conversations'].get(user_id, [])
+                return []
+        except Exception as e:
+            print(f"Error retrieving conversation history: {e}")
+            return []
+
     def store_feedback(self, user_id: str, query: str, rating: int, comment: str = "") -> bool:
         """Store thumbs-up / thumbs-down feedback per user query."""
         try:
@@ -227,12 +383,35 @@ class HistoryManager:
         if not profile and not history:
             return None
 
+        def _clean_for_json(obj):
+            """Remove _id and other non-serializable fields for JSON."""
+            if isinstance(obj, list):
+                return [_clean_for_json(item) for item in obj]
+            elif isinstance(obj, dict):
+                cleaned = {}
+                for k, v in obj.items():
+                    if k == '_id':  # Skip MongoDB _id field
+                        continue
+                    if isinstance(v, (dict, list)):
+                        cleaned[k] = _clean_for_json(v)
+                    else:
+                        try:
+                            json.dumps(v)  # Test if serializable
+                            cleaned[k] = v
+                        except (TypeError, ValueError):
+                            cleaned[k] = str(v)  # Convert non-serializable to string
+                return cleaned
+            else:
+                return obj
+
         ctx_parts = []
         if profile:
-            ctx_parts.append("**User Profile**:\n" + json.dumps(profile, indent=2))
+            cleaned_profile = _clean_for_json(profile)
+            ctx_parts.append("**User Profile**:\n" + json.dumps(cleaned_profile, indent=2))
 
         if history:
-            ctx_parts.append("**Trip History**:\n" + json.dumps(history, indent=2))
+            cleaned_history = _clean_for_json(history)
+            ctx_parts.append("**Trip History**:\n" + json.dumps(cleaned_history, indent=2))
 
         return "\n\n".join(ctx_parts)
 

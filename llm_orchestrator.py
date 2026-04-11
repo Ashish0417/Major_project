@@ -2668,12 +2668,15 @@ Examples:
     #         #       Tier 0 → Tier 1 → Tier 2
     #         day_itinerary[day_num] = transports + moveable + hotels
     
-    def display_itinerary(self, itinerary: dict, trip_details: dict):
-        """Display formatted day-by-day itinerary with proper emojis and timestamps"""
+    def display_itinerary(self, itinerary: dict, trip_details: dict) -> str:
+        """Display formatted day-by-day itinerary with proper emojis and timestamps.
+        Returns the formatted output as a string for storage/display."""
         
-        print("\n" + "="*80)
-        print("📋 YOUR PERSONALIZED DAY-BY-DAY ITINERARY")
-        print("="*80)
+        output_lines = []
+        
+        output_lines.append("\n" + "="*80)
+        output_lines.append("📋 YOUR PERSONALIZED DAY-BY-DAY ITINERARY")
+        output_lines.append("="*80)
         
         destination = trip_details.get('destination_city', 'Destination')
         origin = trip_details.get('origin_city', 'Origin')
@@ -2821,6 +2824,132 @@ Examples:
                     if hasattr(item, 'amenities') and item.amenities:
                         amenities_str = ', '.join(item.amenities[:2])
                         print(f"      🏠 {amenities_str}")
+            
+            if day_cost > 0:
+                print(f"\n   {'─'*76}")
+                print(f"   💰 Day {day_num + 1} Total: INR {day_cost:,.2f}")
+        
+        print("\n" + "="*80)
+        print("✅ ITINERARY GENERATION COMPLETE!")
+        print("="*80)
+    
+    
+    def display_itinerary_text(self, itinerary: dict, trip_details: dict):
+        """Display formatted day-by-day itinerary as text (for console output capture)."""
+        
+        destination = trip_details.get('destination_city', 'Destination')
+        origin = trip_details.get('origin_city', 'Origin')
+        
+        print("\n" + "="*80)
+        print("📋 YOUR PERSONALIZED DAY-BY-DAY ITINERARY")
+        print("="*80)
+        
+        print(f"\n🌍 Destination: {destination}")
+        print(f"📤 From: {origin}")
+        print(f"💰 Total Cost: {itinerary.get('currency', 'INR')} {itinerary.get('total_cost', 0):,.2f}")
+        print(f"📅 Duration: {itinerary.get('num_days', 0)} days")
+        
+        # Show optimizer metadata if available
+        if 'optimizer_metadata' in itinerary:
+            meta = itinerary['optimizer_metadata']
+            if meta.get('optimizer') == 'langgraph':
+                print(f"\n🤖 LangGraph Optimization:")
+                print(f"   Score: {meta.get('score', 0):.1f}/100")
+                print(f"   Combinations evaluated: {meta.get('combinations_evaluated', 0)}")
+        
+        # Day-by-day breakdown
+        for day_num in range(itinerary.get('num_days', 0)):
+            if day_num not in itinerary.get('itinerary', {}):
+                continue
+            
+            items = itinerary['itinerary'][day_num]
+            
+            print(f"\n{'━'*80}")
+            print(f"📅 DAY {day_num + 1}")
+            print(f"{'━'*80}")
+            
+            if not items:
+                print("   🌴 Rest day / Free time")
+                continue
+            
+            day_cost = 0
+            
+            for item in items:
+                name = getattr(item, 'name', None)
+                if not name or name == 'Unknown':
+                    item_type_check = (getattr(item, 'item_type', '')
+                                    or getattr(item, 'category', '')).lower()
+                    if 'flight' in item_type_check or 'transport' in item_type_check:
+                        carrier = getattr(item, 'carrier', None)
+                        if not carrier and hasattr(item, 'properties'):
+                            carrier = item.properties.get('provider', '')
+                        orig = getattr(item, 'origin', '')
+                        dest = getattr(item, 'destination', '')
+                        if not orig and hasattr(item, 'properties'):
+                            orig = item.properties.get('origin', '')
+                        if not dest and hasattr(item, 'properties'):
+                            dest = item.properties.get('destination', '')
+                        is_ret = getattr(item, 'is_return', False)
+                        ret_label = ' (Return)' if is_ret else ''
+                        name = (f"{carrier} {orig}→{dest}{ret_label}" if carrier 
+                                else f"Flight {orig}→{dest}{ret_label}")
+                    else:
+                        name = 'Unknown'
+                
+                item_type = getattr(item, 'item_type', None) or getattr(item, 'category', 'unknown')
+                item_type = item_type.lower() if item_type else 'unknown'
+                
+                icon = self._get_item_icon(item_type, name)
+                time_str = self._get_item_time(item)
+                duration_str = self._get_item_duration(item)
+                cost = self._get_item_cost(item)
+                
+                if cost:
+                    day_cost += cost
+                
+                print(f"\n   {icon} {time_str} • {name}{duration_str}")
+                
+                if cost > 0:
+                    print(f"      💵 INR {cost:,.2f}")
+                
+                if hasattr(item, 'rating') and item.rating and item.rating > 0:
+                    stars = min(5, int(item.rating))
+                    rating_str = '⭐' * stars
+                    if item.rating % 1 > 0.4:
+                        rating_str += '✨'
+                    print(f"      {rating_str} {item.rating:.1f}/5")
+                
+                if item_type in ['flight', 'transport']:
+                    carrier = getattr(item, 'carrier', None)
+                    if not carrier and hasattr(item, 'properties') and isinstance(item.properties, dict):
+                        carrier = item.properties.get('provider') or item.properties.get('carrier')
+                    if carrier and carrier != 'Unknown':
+                        origin_disp = getattr(item, 'origin', '')
+                        dest_disp = getattr(item, 'destination', '')
+                        if not origin_disp and hasattr(item, 'properties'):
+                            origin_disp = item.properties.get('origin', '')
+                        if not dest_disp and hasattr(item, 'properties'):
+                            dest_disp = item.properties.get('destination', '')
+                        route = f" {origin_disp}→{dest_disp}" if (origin_disp and dest_disp) else ""
+                        carrier_icon = self._get_item_icon(item_type, carrier)
+                        transport_type = ''
+                        carrier_lower = carrier.lower()
+                        if 'train' in carrier_lower or 'railway' in carrier_lower:
+                            transport_type = ' (Train)'
+                        elif 'bus' in carrier_lower or 'public' in carrier_lower:
+                            transport_type = ' (Bus)'
+                        elif 'taxi' in carrier_lower or 'cab' in carrier_lower or 'ola' in carrier_lower or 'uber' in carrier_lower:
+                            transport_type = ' (Taxi)'
+                        print(f"      {carrier_icon} {carrier}{transport_type}{route}")
+                    if hasattr(item, 'duration_minutes') and item.duration_minutes > 0:
+                        hrs = item.duration_minutes // 60
+                        mins = item.duration_minutes % 60
+                        print(f"      ⏱️ Duration: {hrs}h {mins}m")
+                elif item_type in ['restaurant']:
+                    if hasattr(item, 'cuisine_type') and item.cuisine_type:
+                        print(f"      🍜 {item.cuisine_type} cuisine")
+                    elif hasattr(item, 'properties') and item.properties.get('cuisine'):
+                        print(f"      🍜 {item.properties.get('cuisine')} cuisine")
             
             if day_cost > 0:
                 print(f"\n   {'─'*76}")
@@ -3621,6 +3750,67 @@ Examples:
             
             display_enhanced_itinerary(enhanced, total_budget=total_budget)
             
+            # Store complete itinerary to MongoDB
+            try:
+                user_id = trip_details.get('user_id', 'anonymous')
+                
+                # Calculate total cost
+                total_cost = sum(day.total_cost for day in enhanced)
+                
+                # Convert EnhancedDaySchedule objects to storable format
+                daily_schedules_data = []
+                for day in enhanced:
+                    day_data = {
+                        'day_number': day.day_number,
+                        'total_cost': day.total_cost,
+                        'total_duration_minutes': day.total_duration_minutes,
+                        'items': [
+                            {
+                                'time': item.time,
+                                'type': item.type,
+                                'name': item.name,
+                                'duration_minutes': item.duration_minutes,
+                                'cost': item.cost,
+                                'currency': item.currency,
+                                'cost_inr': item.cost_inr,
+                                'details': item.details
+                            }
+                            for item in day.items
+                        ]
+                    }
+                    daily_schedules_data.append(day_data)
+                
+                # Get optimization score if available
+                optimization_score = 0
+                combinations_evaluated = 0
+                if isinstance(itinerary, dict):
+                    optimization_score = itinerary.get('score', 0)
+                    combinations_evaluated = itinerary.get('combinations_evaluated', 0)
+                
+                # Prepare itinerary data for storage
+                itinerary_data = {
+                    'destination': trip_details.get('destination_city', ''),
+                    'origin': trip_details.get('origin_city', ''),
+                    'departure_date': trip_details.get('departure_date', ''),
+                    'return_date': trip_details.get('return_date', ''),
+                    'num_days': trip_details.get('num_days', 0),
+                    'total_budget_inr': total_budget,
+                    'total_cost_inr': total_cost,
+                    'optimization_score': optimization_score,
+                    'combinations_evaluated': combinations_evaluated,
+                    'daily_schedules': daily_schedules_data,
+                    'query': trip_details.get('query', ''),
+                    'interests': trip_details.get('interests', []),
+                    'dietary_restrictions': trip_details.get('dietary_restrictions', [])
+                }
+                
+                # Store to MongoDB
+                self.history_manager.store_itinerary(user_id, itinerary_data)
+                print(f"\n✅ Complete itinerary stored to MongoDB for user {user_id}")
+                
+            except Exception as storage_error:
+                print(f"\n⚠️ Could not store itinerary to MongoDB: {storage_error}")
+            
         except Exception as e:
             print(f"   ⚠️ Transport error: {e}")
             self.display_itinerary(itinerary, trip_details)
@@ -3640,13 +3830,34 @@ Examples:
         # Check if it's a trip planning request
         if any(word in query.lower() for word in ['plan', 'trip', 'itinerary', 'travel', 'visit']):
             trip_details = self.extract_trip_details(query)
+            trip_details['user_id'] = user_id  # Add user_id for storage
+            trip_details['query'] = query  # Add original query
 
             if trip_details.get('destination_city'):
                 result = self.generate_itinerary(trip_details)
 
-                # Save trip history entry for RAG
+                # Capture itinerary output as text for storage
+                import io
+                import sys
+                
+                captured_output = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = captured_output
+                
+                try:
+                    # Display itinerary (output goes to capture)
+                    self.display_itinerary_text(result, trip_details)
+                finally:
+                    sys.stdout = old_stdout
+                
+                itinerary_response = captured_output.getvalue()
+                
+                # Print to actual console
+                print(itinerary_response)
+                
+                # Save trip history entry for RAG and store conversation
                 if user_id != 'anonymous':
-                    self.history_manager.store_trip_history(user_id, {
+                    trip_data = {
                         'origin_city': trip_details.get('origin_city'),
                         'destination': trip_details.get('destination_city'),
                         'departure_date': trip_details.get('departure_date'),
@@ -3657,13 +3868,24 @@ Examples:
                         'generated_at': datetime.now().isoformat(),
                         'query': query,
                         'result_summary': 'Itinerary generated'
-                    })
+                    }
+                    self.history_manager.store_trip_history(user_id, trip_data)
+                    # Store the complete itinerary response
+                    self.history_manager.store_conversation(user_id, query, itinerary_response, trip_data)
+                    # Also store as raw itinerary output
+                    self.history_manager.store_itinerary_output(user_id, itinerary_response, trip_data)
 
-                return "Itinerary generated above ↑"
+                return itinerary_response
             else:
-                return "❓ I need at least a destination city. Example: 'Plan a trip to Paris from Bangalore'"
+                response = "❓ I need at least a destination city. Example: 'Plan a trip to Paris from Bangalore'"
+                if user_id != 'anonymous':
+                    self.history_manager.store_conversation(user_id, query, response)
+                return response
 
-        return "❓ I specialize in planning complete trip itineraries. Try: 'Plan a trip from Bangalore to Paris for 5 days'"
+        response = "❓ I specialize in planning complete trip itineraries. Try: 'Plan a trip from Bangalore to Paris for 5 days'"
+        if user_id != 'anonymous':
+            self.history_manager.store_conversation(user_id, query, response)
+        return response
 
     def interactive(self):
         """Interactive mode"""

@@ -57,6 +57,8 @@ CHAT_HTML = """
   document.getElementById('thumbsDown').addEventListener('click', () => sendFeedback(0));
 
   let lastQuery = '';
+  let lastResponse = '';
+  let lastTripInfo = {};
   let typingBubble = null;
 
   function setTyping(on) {
@@ -102,7 +104,15 @@ CHAT_HTML = """
       setTyping(false);
 
       if (res.ok) {
-        addBubble(data.response || 'No response', false);
+        lastResponse = data.response || 'No response';
+        // Try to extract trip info from response
+        if (lastResponse.includes('Destination:')) {
+          lastTripInfo = {
+            has_itinerary: true,
+            response_length: lastResponse.length
+          };
+        }
+        addBubble(lastResponse, false);
         statusEl.textContent = '✅ Done. You can give thumbs feedback.';
       } else {
         addBubble(`Error: ${data.response || 'Unknown issue'}`, false);
@@ -120,14 +130,27 @@ CHAT_HTML = """
       statusEl.textContent = 'Send a query first.';
       return;
     }
-    const comment = rating === 1 ? 'thumbs up' : 'thumbs down';
-    const res = await fetch('/api/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, query: lastQuery, rating, comment })
-    });
-    const data = await res.json();
-    statusEl.textContent = data.status;
+    const comment = rating === 1 ? 'Great itinerary!' : 'Could be better';
+    const feedbackData = {
+      user_id: userId,
+      query: lastQuery,
+      response: lastResponse,
+      rating: rating,
+      comment: comment,
+      trip_info: lastTripInfo
+    };
+    
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(feedbackData)
+      });
+      const data = await res.json();
+      statusEl.textContent = data.status;
+    } catch (error) {
+      statusEl.textContent = '❌ Error sending feedback';
+    }
   }
 </script>
 </body>
@@ -157,12 +180,26 @@ def feedback_api():
     query = data.get('query', '')
     rating = int(data.get('rating', 0))
     comment = data.get('comment', '')
+    response_text = data.get('response', '')
+    trip_info = data.get('trip_info', {})
 
     if rating not in (0, 1):
         return jsonify({'status': 'Rating must be 0 or 1.'}), 400
 
-    orchestrator.history_manager.store_feedback(user_id, query, rating, comment)
-    return jsonify({'status': 'Feedback saved. Thank you!'})
+    success = orchestrator.history_manager.store_feedback(
+        user_id, 
+        query, 
+        rating, 
+        comment,
+        response_text=response_text,
+        trip_info=trip_info
+    )
+    
+    if success:
+        emoji = '👍' if rating == 1 else '👎'
+        return jsonify({'status': f'{emoji} Feedback saved. Thank you!'})
+    else:
+        return jsonify({'status': '❌ Error saving feedback'}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

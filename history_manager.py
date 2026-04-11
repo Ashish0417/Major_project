@@ -267,29 +267,35 @@ class HistoryManager:
             print(f"Error retrieving conversation history: {e}")
             return []
 
-    def store_feedback(self, user_id: str, query: str, rating: int, comment: str = "") -> bool:
-        """Store thumbs-up / thumbs-down feedback per user query."""
+    def store_feedback(self, user_id: str, query: str, rating: int, comment: str = "", response_text: str = "", trip_info: Dict[str, Any] = None) -> bool:
+        """Store thumbs-up / thumbs-down feedback per user query with full context."""
         try:
             feedback_entry = {
                 'user_id': user_id,
                 'query': query,
+                'response': response_text[:500] if response_text else "",  # Store first 500 chars
                 'rating': rating,
+                'rating_emoji': '👍' if rating == 1 else '👎',
                 'comment': comment,
+                'trip_info': trip_info or {},
                 'created_at': datetime.now().isoformat()
             }
 
             if self.use_mongodb:
                 fdb = self.db['feedback']
-                fdb.insert_one(feedback_entry)
+                result = fdb.insert_one(feedback_entry)
+                print(f"Stored feedback for user {user_id}: {feedback_entry['rating_emoji']} (ID: {result.inserted_id})")
             else:
                 if user_id not in self.memory_storage['feedback']:
                     self.memory_storage['feedback'][user_id] = []
                 self.memory_storage['feedback'][user_id].append(feedback_entry)
+                print(f"Stored feedback for user {user_id}: {feedback_entry['rating_emoji']}")
 
-            print(f"Stored feedback for user {user_id}: rating={rating}")
             return True
         except Exception as e:
             print(f"Error storing feedback: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def get_feedback(self, user_id: str) -> List[Dict]:

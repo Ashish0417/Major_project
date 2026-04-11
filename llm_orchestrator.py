@@ -317,10 +317,41 @@ Examples:
                 ret = dep + timedelta(days=data['num_days'])
                 data['return_date'] = ret.strftime('%Y-%m-%d')
             
+            # Apply defaults for missing dates/budget
+            if not data.get('departure_date') and data.get('num_days'):
+                # If only duration is specified, default to starting tomorrow
+                tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+                data['departure_date'] = tomorrow
+                ret_date = (datetime.now() + timedelta(days=data['num_days'] + 1))
+                data['return_date'] = ret_date.strftime('%Y-%m-%d')
+            
             return data
         except Exception as e:
             print(f"   ⚠️ Extraction error: {e}")
             return {}
+    
+    def _format_trip_summary(self, trip_details: dict) -> str:
+        """Format trip details as a readable summary for display"""
+        origin = trip_details.get('origin_city', 'N/A')
+        destination = trip_details.get('destination_city', 'N/A')
+        departure = trip_details.get('departure_date', 'N/A')
+        return_date = trip_details.get('return_date', 'N/A')
+        num_days = trip_details.get('num_days', 'N/A')
+        budget = trip_details.get('budget_inr', 'N/A')
+        
+        # Format budget with thousands separator if int, otherwise just show value
+        budget_str = f"₹{budget:,}" if isinstance(budget, int) else str(budget)
+        
+        summary = (
+            "📋 TRIP SUMMARY\n"
+            "═" * 50 + "\n"
+            f"📍 From: {origin} → To: {destination}\n"
+            f"📅 Duration: {num_days} days\n"
+            f"🗓️  Departing: {departure} | Returning: {return_date}\n"
+            f"💰 Budget: {budget_str}\n"
+            "═" * 50 + "\n\n"
+        )
+        return summary
         
     
     def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None):
@@ -1110,7 +1141,9 @@ Examples:
             print(f"   ✅ Round 0: feasible plan found with initial search!")
             return result
 
-        print(f"   ❌ Round 0 not feasible (cost={result.get('total_cost', '?'):.0f} > budget={budget:.0f})")
+        cost_val = result.get('total_cost', float('inf'))
+        cost_str = f"{cost_val:.0f}" if isinstance(cost_val, (int, float)) else str(cost_val)
+        print(f"   ❌ Round 0 not feasible (cost={cost_str} > budget={budget:.0f})")
         print(f"   🔄 Starting expansion rounds...\n")
 
         # ── ROUNDS 1+: Expand agent by agent ───────────────────────────────
@@ -1439,7 +1472,9 @@ Examples:
             print(f"   ✅ Parallel expansion: feasible plan found in Round 0")
             return result
 
-        print(f"   ❌ Round 0 not feasible (cost={result.get('total_cost', '?'):.0f} > budget={budget:.0f})")
+        cost_val = result.get('total_cost', float('inf'))
+        cost_str = f"{cost_val:.0f}" if isinstance(cost_val, (int, float)) else str(cost_val)
+        print(f"   ❌ Round 0 not feasible (cost={cost_str} > budget={budget:.0f})")
         print(f"   🔄 Starting parallel expansion rounds...\n")
 
         # ── ROUNDS 1+: Expand ALL agents together ───────────────────────────────
@@ -2837,6 +2872,13 @@ Examples:
     def display_itinerary_text(self, itinerary: dict, trip_details: dict):
         """Display formatted day-by-day itinerary as text (for console output capture)."""
         
+        # Safety check: handle None itinerary
+        if itinerary is None:
+            print("\n❌ ITINERARY GENERATION FAILED")
+            print("═" * 80)
+            print("Unable to generate itinerary. The budget may be too low or there was an error.")
+            return
+        
         destination = trip_details.get('destination_city', 'Destination')
         origin = trip_details.get('origin_city', 'Origin')
         
@@ -3835,6 +3877,24 @@ Examples:
 
             if trip_details.get('destination_city'):
                 result = self.generate_itinerary(trip_details)
+
+                # Check if itinerary generation succeeded
+                if result is None:
+                    error_response = (
+                        "❌ ITINERARY GENERATION FAILED\n"
+                        "═" * 50 + "\n"
+                        "The budget specified may be too low to create a feasible itinerary,\n"
+                        "or there was an error generating your trip plan.\n"
+                        f"Destination: {trip_details.get('destination_city')}\n"
+                        f"Days: {trip_details.get('num_days')}\n"
+                        f"Budget: ₹{trip_details.get('budget_inr', 'Not specified'):,}\n\n"
+                        "💡 Try increasing your budget or adjusting your preferences."
+                    )
+                    if user_id != 'anonymous':
+                        self.history_manager.store_conversation(user_id, query, error_response, 
+                                                              {'destination': trip_details.get('destination_city'),
+                                                               'status': 'generation_failed'})
+                    return error_response
 
                 # Capture itinerary output as text for storage
                 import io

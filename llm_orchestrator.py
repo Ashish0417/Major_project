@@ -98,8 +98,18 @@ class PerformanceMetrics:
         return self.end_time - self.start_time
     
     @property
+    def duration(self) -> float:
+        """Shorthand for duration_seconds"""
+        return self.duration_seconds
+    
+    @property
     def memory_delta_mb(self) -> float:
         return self.end_memory_mb - self.start_memory_mb
+    
+    @property
+    def memory_delta(self) -> float:
+        """Shorthand for memory_delta_mb"""
+        return self.memory_delta_mb
     
     def __str__(self) -> str:
         duration = f"{self.duration_seconds:.2f}s"
@@ -450,13 +460,34 @@ Examples:
         
 
         print(f"\n{'='*80}")
-        print("[2-6/6] 🔍 SEARCH + OPTIMIZE (Comparing Two Expansion Strategies)")
+        print("[2-6/6] 🔍 SEARCH + OPTIMIZE (Comparing Three Expansion Strategies)")
         print("="*80)
+        
+        # ────────────────────────────────────────────────────────────────────────
+        # CRITICAL: Fetch UNIFIED search space ONCE before all strategies
+        # ────────────────────────────────────────────────────────────────────────
+        # All 3 methods will slice from the same pre-fetched, sorted-by-cost list
+        # This ensures fair comparison and consistent search space across methods
+        
+        perf_monitor.start_step("Unified Search Space Fetch")
+        unified_search_space = self._fetch_initial_search_space(
+            origin_code=origin_code,
+            dest_code=dest_code,
+            destination=destination,
+            departure_date=departure_date,
+            return_date=return_date,
+            interests=interests,
+            dietary=dietary,
+            trip_details=trip_details,
+            max_per_agent=50,  # Can increase if needed, but 50 usually sufficient
+        )
+        perf_monitor.finish_step("Unified Search Space Fetch")
 
         # ── STRATEGY 1: One-by-one expansion ───────────────────────────────────
         print(f"\n📊 STRATEGY 1: One-by-One Expansion (cycle through agents)")
         print("-" * 80)
-        perf_monitor.start_step("OneByOne Expansion")
+        strategy_1_perf = PerformanceMonitor()
+        strategy_1_perf.start_step("OneByOne Expansion")
         result_onebyones = self._fetch_with_expansion(
             origin_code=origin_code,
             dest_code=dest_code,
@@ -469,16 +500,18 @@ Examples:
             num_days=num_days,
             user_profile=user_profile,
             trip_details=trip_details,
+            search_space=unified_search_space,  # NEW: Use unified search space
             initial_counts={"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25},
             max_rounds=3,
             perf_monitor=None,  # Don't track sub-steps separately
         )
-        perf_monitor.finish_step("OneByOne Expansion")
+        strategy_1_perf.finish_step("OneByOne Expansion")
 
         # ── STRATEGY 2: Parallel expansion ─────────────────────────────────────
         print(f"\n📊 STRATEGY 2: Parallel Expansion (expand all agents together)")
         print("-" * 80)
-        perf_monitor.start_step("Parallel Expansion")
+        strategy_2_perf = PerformanceMonitor()
+        strategy_2_perf.start_step("Parallel Expansion")
         result_parallel = self._fetch_with_parallel_expansion(
             origin_code=origin_code,
             dest_code=dest_code,
@@ -491,11 +524,12 @@ Examples:
             num_days=num_days,
             user_profile=user_profile,
             trip_details=trip_details,
+            search_space=unified_search_space,  # NEW: Use unified search space
             initial_counts={"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25},
             max_rounds=3,
             perf_monitor=None,
         )
-        perf_monitor.finish_step("Parallel Expansion")
+        strategy_2_perf.finish_step("Parallel Expansion")
 
         # ── COMPARISON ─────────────────────────────────────────────────────────
         print(f"\n{'='*80}")
@@ -532,7 +566,8 @@ Examples:
         # ── STRATEGY 3: Sequential generation ──────────────────────────────────
         print(f"\n📊 STRATEGY 3: Sequential Generation (one-by-one evaluation)")
         print("-" * 80)
-        perf_monitor.start_step("Sequential Generation")
+        strategy_3_perf = PerformanceMonitor()
+        strategy_3_perf.start_step("Sequential Generation")
         result_sequential = self._fetch_with_sequential_generation(
             origin_code=origin_code,
             dest_code=dest_code,
@@ -545,14 +580,15 @@ Examples:
             num_days=num_days,
             user_profile=user_profile,
             trip_details=trip_details,
+            search_space=unified_search_space,  # NEW: Use unified search space
             initial_step_size=1,  # Unused (method calculates min unique required)
             perf_monitor=None,
         )
-        perf_monitor.finish_step("Sequential Generation")
+        strategy_3_perf.finish_step("Sequential Generation")
 
         # ── COMPARISON (3-way) ─────────────────────────────────────────────────
         print(f"\n{'='*80}")
-        print("📊 THREE-STRATEGY COMPARISON")
+        print("📊 THREE-STRATEGY COMPARISON: PERFORMANCE & RESULTS")
         print("="*80)
         
         strategy_1_valid = (
@@ -575,24 +611,49 @@ Examples:
         cost_2 = result_parallel.get('total_cost', float('inf')) if result_parallel else float('inf')
         cost_3 = result_sequential.get('total_cost', float('inf')) if result_sequential else float('inf')
         
-        print(f"{'Strategy':<25} | {'Valid':<8} | {'Cost (INR)':<15} | {'vs Budget':<12}")
-        print("-" * 80)
+        # Extract performance metrics - safely handle None cases
+        strat_1_metrics = strategy_1_perf.metrics.get("OneByOne Expansion") if strategy_1_perf.metrics else None
+        strat_2_metrics = strategy_2_perf.metrics.get("Parallel Expansion") if strategy_2_perf.metrics else None
+        strat_3_metrics = strategy_3_perf.metrics.get("Sequential Generation") if strategy_3_perf.metrics else None
+        
+        time_1 = strat_1_metrics.duration if (strat_1_metrics and hasattr(strat_1_metrics, 'duration')) else 0.0
+        time_2 = strat_2_metrics.duration if (strat_2_metrics and hasattr(strat_2_metrics, 'duration')) else 0.0
+        time_3 = strat_3_metrics.duration if (strat_3_metrics and hasattr(strat_3_metrics, 'duration')) else 0.0
+        
+        mem_1 = strat_1_metrics.memory_delta if (strat_1_metrics and hasattr(strat_1_metrics, 'memory_delta')) else 0.0
+        mem_2 = strat_2_metrics.memory_delta if (strat_2_metrics and hasattr(strat_2_metrics, 'memory_delta')) else 0.0
+        mem_3 = strat_3_metrics.memory_delta if (strat_3_metrics and hasattr(strat_3_metrics, 'memory_delta')) else 0.0
+        
+        # Display comprehensive comparison table
+        print(f"\n{'='*100}")
+        print(f"{'Strategy':<22} | {'Time (s)':>8} | {'Memory (MB)':>11} | {'Valid':>7} | {'Cost (INR)':>12} | {'vs Budget':>10}")
+        print("-" * 100)
         
         status_1 = "✅ Yes" if strategy_1_valid else "❌ No"
         margin_1 = f"{((cost_1 / budget - 1) * 100):+.1f}%" if cost_1 < float('inf') else "N/A"
-        print(f"{'One-by-One Agents':<25} | {status_1:<8} | {cost_1:>13,.0f} | {margin_1:>12}")
+        print(f"{'One-by-One Agents':<22} | {time_1:>8.2f} | {mem_1:>11.1f} | {status_1:>7} | {cost_1:>12,.0f} | {margin_1:>10}")
         
         status_2 = "✅ Yes" if strategy_2_valid else "❌ No"
         margin_2 = f"{((cost_2 / budget - 1) * 100):+.1f}%" if cost_2 < float('inf') else "N/A"
-        print(f"{'Parallel Expansion':<25} | {status_2:<8} | {cost_2:>13,.0f} | {margin_2:>12}")
+        print(f"{'Parallel Expansion':<22} | {time_2:>8.2f} | {mem_2:>11.1f} | {status_2:>7} | {cost_2:>12,.0f} | {margin_2:>10}")
         
         status_3 = "✅ Yes" if strategy_3_valid else "❌ No"
         margin_3 = f"{((cost_3 / budget - 1) * 100):+.1f}%" if cost_3 < float('inf') else "N/A"
-        print(f"{'Sequential (Memory-Opt)':<25} | {status_3:<8} | {cost_3:>13,.0f} | {margin_3:>12}")
+        print(f"{'Sequential (Mem-Opt)':<22} | {time_3:>8.2f} | {mem_3:>11.1f} | {status_3:>7} | {cost_3:>12,.0f} | {margin_3:>10}")
         
-        print("-" * 80)
+        print("-" * 100)
+        
+        # Summary stats
+        fastest_strategy = min([("One-by-One", time_1), ("Parallel", time_2), ("Sequential", time_3)], key=lambda x: x[1])
+        most_efficient = min([("One-by-One", mem_1), ("Parallel", mem_2), ("Sequential", mem_3)], key=lambda x: x[1])
+        cheapest_strategy = min([("One-by-One", cost_1), ("Parallel", cost_2), ("Sequential", cost_3)], key=lambda x: x[1] if x[1] < float('inf') else float('inf'))
+        
+        print(f"\n🏆 PERFORMANCE INSIGHTS:")
+        print(f"   ⚡ Fastest: {fastest_strategy[0]} ({fastest_strategy[1]:.2f}s)")
+        print(f"   💾 Most Memory-Efficient: {most_efficient[0]} ({most_efficient[1]:.1f} MB)")
+        print(f"   💰 Cheapest: {cheapest_strategy[0]} (INR {cheapest_strategy[1]:,.0f})" if cheapest_strategy[1] < float('inf') else f"   💰 Cheapest: None (all infeasible)")
+        print("=" * 100)
 
-        print("=" * 80)
         print("\n🎯 ITINERARY SELECTION")
         print("="*80)
         
@@ -644,7 +705,175 @@ Examples:
 
         return optimized
     
+    # ============================================================================
+    # UNIFIED SEARCH SPACE (FIX: Consistent options across all methods)
+    # ============================================================================
     
+    def _fetch_initial_search_space(
+        self,
+        origin_code: str,
+        dest_code: str,
+        destination: str,
+        departure_date: str,
+        return_date: str,
+        interests: Optional[list],
+        dietary: Optional[list],
+        trip_details: dict,
+        max_per_agent: int = 50,
+    ) -> dict:
+        """
+        CRITICAL FIX: Fetch a LARGE, CONSISTENT search space once and sort by cost.
+        
+        All three expansion methods will slice from this pre-fetched, sorted list.
+        This ensures:
+        - All methods operate on the SAME search space
+        - Consistent ordering by cost (not random API results)
+        - No duplicate API calls (just slice the pre-computed list)
+        - Fair comparison between strategies
+        
+        Parameters:
+        - max_per_agent: Total items to fetch from each agent (e.g., 50)
+        
+        Returns:
+        dict with sorted lists:
+        {
+            "flight": [Flight, Flight, ...],  # Sorted by price
+            "hotel": [Hotel, Hotel, ...],     # Sorted by price_per_night
+            "restaurant": [Restaurant, ...],  # Sorted by average_meal_cost
+            "activity": [Activity, ...],      # Sorted by price
+            "ground_transport": [Transport, ...] # Sorted by price
+        }
+        """
+        
+        print(f"\n{'='*80}")
+        print("🔍 FETCHING UNIFIED SEARCH SPACE (all methods will use this)")
+        print("="*80)
+        print(f"   📌 Fetching {max_per_agent} options from each agent...")
+        print(f"   📌 Sorting by cost (consistent across all strategies)")
+        print(f"   📌 All methods will slice from same pre-computed list\n")
+        
+        search_space = {
+            "flight": [],
+            "hotel": [],
+            "restaurant": [],
+            "activity": [],
+            "ground_transport": []
+        }
+        
+        base_currency = "INR"
+        
+        # ── 1. FLIGHTS ─────────────────────────────────────────────────────────
+        print(f"   ✈️  Searching flights ({max_per_agent} results)...")
+        try:
+            flights = self.flight_agent.search_flights(
+                origin=origin_code,
+                destination=dest_code,
+                departure_date=departure_date,
+                max_results=max_per_agent,
+            )
+            # Convert to base currency and sort by price
+            for f in flights:
+                f.price = self.currency_converter.convert(f.price, f.currency, base_currency)
+                f.currency = base_currency
+            flights = sorted(flights, key=lambda f: getattr(f, 'price', float('inf')))
+            search_space["flight"] = flights
+            print(f"      ✅ {len(flights)} flights fetched and sorted")
+        except Exception as e:
+            print(f"      ❌ Error fetching flights: {e}")
+            search_space["flight"] = []
+        
+        # ── 2. HOTELS ─────────────────────────────────────────────────────────
+        print(f"   🏨 Searching hotels ({max_per_agent} results)...")
+        try:
+            hotels = self.hotel_agent.search_accommodations(
+                destination=destination,
+                check_in=departure_date,
+                check_out=return_date,
+                max_results=max_per_agent,
+            )
+            # Convert to base currency and sort by price_per_night
+            for h in hotels:
+                h.price_per_night = self.currency_converter.convert(h.price_per_night, h.currency, base_currency)
+                h.currency = base_currency
+            hotels = sorted(hotels, key=lambda h: getattr(h, 'price_per_night', float('inf')))
+            search_space["hotel"] = hotels
+            print(f"      ✅ {len(hotels)} hotels fetched and sorted")
+        except Exception as e:
+            print(f"      ❌ Error fetching hotels: {e}")
+            search_space["hotel"] = []
+        
+        # ── 3. RESTAURANTS ─────────────────────────────────────────────────────
+        print(f"   🍱 Searching restaurants ({max_per_agent} results)...")
+        try:
+            restaurants = self.restaurant_agent.search_restaurants(
+                location=destination,
+                dietary_restrictions=dietary or None,
+                max_results=max_per_agent,
+            )
+            # Convert to base currency and sort by average_meal_cost
+            for r in restaurants:
+                r.average_meal_cost = self.currency_converter.convert(r.average_meal_cost, r.currency, base_currency)
+                r.currency = base_currency
+            restaurants = sorted(restaurants, key=lambda r: getattr(r, 'average_meal_cost', float('inf')))
+            search_space["restaurant"] = restaurants
+            print(f"      ✅ {len(restaurants)} restaurants fetched and sorted")
+        except Exception as e:
+            print(f"      ❌ Error fetching restaurants: {e}")
+            search_space["restaurant"] = []
+        
+        # ── 4. ACTIVITIES ─────────────────────────────────────────────────────
+        print(f"   🎭 Searching activities ({max_per_agent} results)...")
+        try:
+            activities = self.activity_agent.search_activities(
+                location=destination,
+                interests=interests or None,
+                max_results=max_per_agent,
+            )
+            # Convert to base currency and sort by price
+            for a in activities:
+                if hasattr(a, "price"):
+                    a.price = self.currency_converter.convert(a.price, a.currency, base_currency)
+                    a.currency = base_currency
+            activities = sorted(activities, key=lambda a: getattr(a, 'price', float('inf')))
+            search_space["activity"] = activities
+            print(f"      ✅ {len(activities)} activities fetched and sorted")
+        except Exception as e:
+            print(f"      ❌ Error fetching activities: {e}")
+            search_space["activity"] = []
+        
+        # ── 5. GROUND TRANSPORT ────────────────────────────────────────────────
+        print(f"   🚕 Searching ground transport ({max_per_agent} results)...")
+        try:
+            distance_km = self.ground_transport_agent.calculate_distance(
+                trip_details.get("origin_city", ""), destination)
+            ground = []
+            if distance_km <= 1000:
+                ground = self.ground_transport_agent.search_transport(
+                    origin=trip_details.get("origin_city", ""),
+                    destination=destination,
+                    transport_types=["taxi", "train", "bus"],
+                    max_results=max_per_agent,
+                )
+            # Convert and sort by price
+            for g in ground:
+                g.price = self.currency_converter.convert(g.price, g.currency, base_currency)
+                g.currency = base_currency
+            ground = sorted(ground, key=lambda g: getattr(g, 'price', float('inf')))
+            search_space["ground_transport"] = ground
+            print(f"      ✅ {len(ground)} ground transport options fetched and sorted")
+        except Exception as e:
+            print(f"      ❌ Error fetching ground transport: {e}")
+            search_space["ground_transport"] = []
+        
+        print(f"\n   📊 UNIFIED SEARCH SPACE CREATED:")
+        print(f"      • Flights: {len(search_space['flight'])}")
+        print(f"      • Hotels: {len(search_space['hotel'])}")
+        print(f"      • Restaurants: {len(search_space['restaurant'])}")
+        print(f"      • Activities: {len(search_space['activity'])}")
+        print(f"      • Ground Transport: {len(search_space['ground_transport'])}")
+        print(f"   ✅ Search space ready for all 3 methods\n")
+        
+        return search_space
 
     def _fetch_with_expansion(
         self,
@@ -659,25 +888,30 @@ Examples:
         num_days: int,
         user_profile,
         trip_details: dict,
+        search_space: dict,  # NEW: Use unified search space instead of API calls!
         initial_counts: Optional[dict] = None,
         max_rounds: int = 3,
         perf_monitor: Optional['PerformanceMonitor'] = None,
     ) -> Optional[dict]:
         """
-        Sub-method 1 from the notes:
-        1. Fetch P1..P4 options from all agents (initial_counts per agent).
-        2. Try to optimise — if a feasible plan is found, return it.
-        3. If not, expand ONE agent's search space by δ, recheck.
-        4. Cycle through all agents before declaring a full round done.
-        5. If still nothing after max_rounds, return None.
-
-        initial_counts: {"flight": P1, "hotel": P2, "restaurant": P3, "activity": P4, ...}
+        REFACTORED: One-by-one expansion using pre-computed search space
+        
+        KEY CHANGE: No more API calls! Instead:
+        1. Accept pre-fetched, sorted-by-cost search_space from generate_itinerary()
+        2. Start with initial_counts (how many of each option to try)
+        3. If not feasible, increase limits and slice more items from search_space
+        4. All methods use the SAME search_space, ensuring fair comparison
+        
+        Advantages:
+        - Consistent search space across methods
+        - No duplicate API calls
+        - Deterministic results (same orderings)
+        - Fair benchmark comparison
         """
-         
-    # ── PRE-CHECK: estimate minimum possible cost ──────────────────────────
+        
+        # ── PRE-CHECK: estimate minimum possible cost ──────────────────────────
         def _estimate_min_cost(destination, departure_date, return_date, num_days):
-            """Quick sanity check before expensive expansion loop."""
-            # Rough minimums (INR) — adjust to your data
+            """Quick sanity check before expansion loop."""
             MIN_TRANSPORT = 400        # cheapest bus/train one-way
             MIN_HOTEL_PER_NIGHT = 800  # budget guesthouse
             MIN_FOOD_PER_DAY = 300     # two basic meals
@@ -699,94 +933,46 @@ Examples:
             return {"error": "budget_too_low", "min_required": min_possible}
         
         if initial_counts is None:
-            initial_counts = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+            initial_counts = {"flight": 5, "hotel": 3, "restaurant": 10, "activity": 12, "ground_transport": 3}
         else:
-            # Ensure all required keys exist (add defaults if missing)
-            defaults = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+            # Ensure all required keys exist
+            defaults = {"flight": 5, "hotel": 3, "restaurant": 10, "activity": 12, "ground_transport": 3}
             for key, value in defaults.items():
                 if key not in initial_counts:
                     initial_counts[key] = value
 
         # ── agent order defines the expansion sequence ────────────────────
-        # NOW INCLUDES ground_transport!
         agent_order = ["flight", "ground_transport", "hotel", "restaurant", "activity"]
 
-        # current max-results per agent (grows by DELTA on each expansion)
+        # current limits per agent (grows by DELTA on each expansion)
         limits = dict(initial_counts)
 
-        # ✅ Initialize cache for reuse across rounds (FIX 4: avoid re-fetching all agents)
-        cached = {}
+        # ── Helper: extract slice from search_space ────────────────────────────
+        def _get_slice(agent_name: str, count: int):
+            """Take first 'count' items from search_space[agent_name]"""
+            options = search_space.get(agent_name, [])
+            return options[:count]
 
-        # ── ROUND 0: Try with initial counts BEFORE expanding ──────────────
-        print(f"\n   🔄 Round 0 (initial search): trying with limits={limits}")
+        # ── ROUND 0: Try with initial counts ───────────────────────────────────
+        print(f"\n   🔄 Round 0 (initial search): limits={limits}")
         
-        flights = self.flight_agent.search_flights(
-            origin=origin_code,
-            destination=dest_code,
-            departure_date=departure_date,
-            max_results=limits["flight"],
-        )
-
-        hotels = self.hotel_agent.search_accommodations(
-            destination=destination,
-            check_in=departure_date,
-            check_out=return_date,
-            max_results=limits["hotel"],
-        )
-
-        restaurants = self.restaurant_agent.search_restaurants(
-            location=destination,
-            dietary_restrictions=dietary or None,
-            max_results=limits["restaurant"],
-        )
-
-        activities = self.activity_agent.search_activities(
-            location=destination,
-            interests=interests or None,
-            max_results=limits["activity"],
-        )
-
-        # ── Currency conversion ────────────────────────────────────────────
-        base = "INR"
-        for f in flights:
-            f.price = self.currency_converter.convert(f.price, f.currency, base)
-            f.currency = base
-        for h in hotels:
-            h.price_per_night = self.currency_converter.convert(h.price_per_night, h.currency, base)
-            h.currency = base
-        for r in restaurants:
-            r.average_meal_cost = self.currency_converter.convert(r.average_meal_cost, r.currency, base)
-            r.currency = base
-        for a in activities:
-            if hasattr(a, "price"):
-                a.price = self.currency_converter.convert(a.price, a.currency, base)
-                a.currency = base
-
-        # Ground transport
-        distance_km = self.ground_transport_agent.calculate_distance(
-            trip_details.get("origin_city", ""), destination)
-        ground = []
-        if distance_km <= 1000:
-            ground = self.ground_transport_agent.search_transport(
-                origin=trip_details.get("origin_city", ""),
-                destination=destination,
-                transport_types=["taxi", "train", "bus"],
-                max_results=limits["ground_transport"],
-            )
-        # transport_all = flights + ground
+        # SLICE from search_space instead of API calls
+        flights = _get_slice("flight", limits["flight"])
+        hotels = _get_slice("hotel", limits["hotel"])
+        restaurants = _get_slice("restaurant", limits["restaurant"])
+        activities = _get_slice("activity", limits["activity"])
+        ground = _get_slice("ground_transport", limits["ground_transport"])
+        
+        # Create transport_all (flights + ground transport sorted by price)
         transport_all = sorted(
             flights + ground,
             key=lambda t: getattr(t, 'price', float('inf'))
         )
 
-        # ✅ Cache Round 0 results for reuse in expansion rounds
-        cached["flight"] = flights
-        cached["hotel"] = hotels
-        cached["restaurant"] = restaurants
-        cached["activity"] = activities
-        cached["ground_transport"] = ground
+        print(f"      Using: {len(flights)} flights, {len(hotels)} hotels, "
+            f"{len(restaurants)} restaurants, {len(activities)} activities")
 
-        # ── Try to optimize with initial counts ────────────────────────────
+        # ── Try to optimize with current limits ────────────────────────────
         result = self._optimize_with_langgraph(
             transport_all, hotels, restaurants, activities,
             num_days, budget, user_profile, trip_details,
@@ -802,7 +988,7 @@ Examples:
         )
 
         if is_feasible:
-            print(f"   ✅ Round 0: feasible plan found with initial search!")
+            print(f"   ✅ Round 0: feasible plan found with initial slice!")
             return result
 
         cost_val = result.get('total_cost', float('inf'))
@@ -810,9 +996,8 @@ Examples:
         print(f"   ❌ Round 0 not feasible (cost={cost_str} > budget={budget:.0f})")
         print(f"   🔄 Starting expansion rounds...\n")
 
-        # ── ROUNDS 1+: Expand agent by agent ───────────────────────────────
-        # ✅ FIX 4: Use cache, only re-fetch the expanding agent
-        best_plan_overall = result  # Track best plan even if not feasible
+        # ── ROUNDS 1+: Expand agent by agent (slicing deeper into search_space) ──
+        best_plan_overall = result
         best_cost_overall = result.get('total_cost', float('inf'))
         
         if perf_monitor:
@@ -824,97 +1009,19 @@ Examples:
                 print(f"   🔄 Round {round_num+1}, expanding '{expanding_agent}' "
                     f"(limits={limits})")
 
-                # ── 1. CACHE-AWARE FETCH: Only re-fetch the expanding agent ────
-                # All other agents use cached results from previous round
-                
-                # Re-fetch flight (might have more options now)
-                if expanding_agent == "flight":
-                    flights = self.flight_agent.search_flights(
-                        origin=origin_code,
-                        destination=dest_code,
-                        departure_date=departure_date,
-                        max_results=limits["flight"],
-                    )
-                    base = "INR"
-                    for f in flights:
-                        f.price = self.currency_converter.convert(f.price, f.currency, base)
-                        f.currency = base
-                    cached["flight"] = flights
-                else:
-                    flights = cached.get("flight", [])
-
-                # Re-fetch hotel if expanding
-                if expanding_agent == "hotel":
-                    hotels = self.hotel_agent.search_accommodations(
-                        destination=destination,
-                        check_in=departure_date,
-                        check_out=return_date,
-                        max_results=limits["hotel"],
-                    )
-                    base = "INR"
-                    for h in hotels:
-                        h.price_per_night = self.currency_converter.convert(
-                            h.price_per_night, h.currency, base)
-                        h.currency = base
-                    cached["hotel"] = hotels
-                else:
-                    hotels = cached.get("hotel", [])
-
-                # Re-fetch restaurant if expanding
-                if expanding_agent == "restaurant":
-                    restaurants = self.restaurant_agent.search_restaurants(
-                        location=destination,
-                        dietary_restrictions=dietary or None,
-                        max_results=limits["restaurant"],
-                    )
-                    base = "INR"
-                    for r in restaurants:
-                        r.average_meal_cost = self.currency_converter.convert(
-                            r.average_meal_cost, r.currency, base)
-                        r.currency = base
-                    cached["restaurant"] = restaurants
-                else:
-                    restaurants = cached.get("restaurant", [])
-
-                # Re-fetch activity if expanding
-                if expanding_agent == "activity":
-                    activities = self.activity_agent.search_activities(
-                        location=destination,
-                        interests=interests or None,
-                        max_results=limits["activity"],
-                    )
-                    base = "INR"
-                    for a in activities:
-                        if hasattr(a, "price"):
-                            a.price = self.currency_converter.convert(
-                                a.price, a.currency, base)
-                            a.currency = base
-                    cached["activity"] = activities
-                else:
-                    activities = cached.get("activity", [])
-
-                # Re-fetch ground_transport if expanding
-                if expanding_agent == "ground_transport":
-                    distance_km = self.ground_transport_agent.calculate_distance(
-                        trip_details.get("origin_city", ""), destination)
-                    ground = []
-                    if distance_km <= 1000:
-                        ground = self.ground_transport_agent.search_transport(
-                            origin=trip_details.get("origin_city", ""),
-                            destination=destination,
-                            transport_types=["taxi", "train", "bus"],
-                            max_results=limits["ground_transport"],
-                        )
-                    cached["ground_transport"] = ground
-                else:
-                    ground = cached.get("ground_transport", [])
+                # ── NEW: Just slice deeper instead of re-fetching ────────────────
+                flights = _get_slice("flight", limits["flight"])
+                hotels = _get_slice("hotel", limits["hotel"])
+                restaurants = _get_slice("restaurant", limits["restaurant"])
+                activities = _get_slice("activity", limits["activity"])
+                ground = _get_slice("ground_transport", limits["ground_transport"])
 
                 transport_all = sorted(
                     flights + ground,
                     key=lambda t: getattr(t, 'price', float('inf'))
                 )
 
-                # ── 2. Try to optimise with cached + freshly-fetched options ────
+                # ── Try to optimise with current slices ──────────────────────────
                 result = self._optimize_with_langgraph(
                     transport_all, hotels, restaurants, activities,
                     num_days, budget, user_profile, trip_details,
@@ -924,7 +1031,7 @@ Examples:
                         num_days, user_profile,
                     )
 
-                # ── 3. Feasibility check ───────────────────────────────────
+                # ── Feasibility check ───────────────────────────────────────────
                 is_feasible = (
                     "error" not in result
                     and result.get("total_cost", float("inf")) <= budget
@@ -948,10 +1055,10 @@ Examples:
                 print(f"   ⚠️  Cost: {current_cost:.0f} > Budget: {budget:.0f}, "
                     f"expanding next agent…")
 
-                # ── 4. Expand the current agent for next iteration ──
+                # ── Expand the current agent for next iteration ──────────────────
                 limits[expanding_agent] += self.DELTA
 
-            # after cycling all agents, bump every limit by δ before next round
+            # After cycling all agents, bump every limit by δ before next round
             print(f"   ⚠️  Round {round_num+1} done — increasing all limits by {self.DELTA}")
             for key in limits:
                 limits[key] += self.DELTA
@@ -986,28 +1093,28 @@ Examples:
         num_days: int,
         user_profile,
         trip_details: dict,
+        search_space: dict,  # NEW: Use unified search space instead of API calls!
         initial_counts: Optional[dict] = None,
         max_rounds: int = 3,
         perf_monitor: Optional['PerformanceMonitor'] = None,
     ) -> Optional[dict]:
         """
-        Alternative strategy: Expand ALL agents together each round (not one-by-one).
+        REFACTORED: Parallel expansion using pre-computed search space
         
-        Strategy comparison:
-        - One-by-one: Cycle through each agent, increasing one at a time
-          (more granular, but more optimization calls)
-        - Parallel: Increase all agents together each round
-          (fewer optimization calls, potentially faster)
-          
-        Rounds structure:
-        1. Round 0: Try with initial counts
-        2. Rounds 1-N: Increase ALL agent limits by DELTA, then try optimization
-        3. If feasible, return; else continue to next round
+        KEY CHANGE: No more API calls! Instead:
+        1. Accept pre-fetched, sorted-by-cost search_space from generate_itinerary()
+        2. Start with initial_counts
+        3. If not feasible, increase ALL limits together and slice more items
+        4. All methods use the SAME search_space, ensuring fair comparison
+        
+        Strategy: Expand ALL agents together each round (vs one-by-one)
+        - Fewer optimization calls, potentially faster
+        - All agents grow in parallel
         """
         
         # ── PRE-CHECK: estimate minimum possible cost ──────────────────────────
         def _estimate_min_cost(destination, departure_date, return_date, num_days):
-            """Quick sanity check before expensive expansion loop."""
+            """Quick sanity check before expansion loop."""
             
             # Rough estimates:
             MIN_FLIGHT_COST = 3000   # INR
@@ -1031,10 +1138,10 @@ Examples:
             return {"error": "budget_too_low", "min_required": min_possible}
         
         if initial_counts is None:
-            initial_counts = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+            initial_counts = {"flight": 5, "hotel": 3, "restaurant": 10, "activity": 12, "ground_transport": 3}
         else:
-            # Ensure all required keys exist (add defaults if missing)
-            defaults = {"flight": 10, "hotel": 10, "restaurant": 20, "activity": 25, "ground_transport": 6}
+            # Ensure all required keys exist
+            defaults = {"flight": 5, "hotel": 3, "restaurant": 10, "activity": 12, "ground_transport": 3}
             for key, value in defaults.items():
                 if key not in initial_counts:
                     initial_counts[key] = value
@@ -1042,82 +1149,34 @@ Examples:
         # ── agent order ────────────────────────────────────────────────────────
         agent_order = ["flight", "ground_transport", "hotel", "restaurant", "activity"]
 
-        # current max-results per agent (ALL grow together each round)
+        # current limits per agent (ALL grow together each round)
         limits = dict(initial_counts)
 
-        # ✅ Cache for reuse across rounds
-        cached = {}
+        # ── Helper: extract slice ──────────────────────────────────────────────
+        def _get_slice(agent_name: str, count: int):
+            """Take first 'count' items from search_space[agent_name]"""
+            options = search_space.get(agent_name, [])
+            return options[:count]
 
-        # ── ROUND 0: Try with initial counts ────────────────────────────────
+        # ── ROUND 0: Try with initial counts ───────────────────────────────────
         print(f"\n   🔄 Round 0 (parallel - initial): limits={limits}")
         
-        flights = self.flight_agent.search_flights(
-            origin=origin_code,
-            destination=dest_code,
-            departure_date=departure_date,
-            max_results=limits["flight"],
-        )
-
-        hotels = self.hotel_agent.search_accommodations(
-            destination=destination,
-            check_in=departure_date,
-            check_out=return_date,
-            max_results=limits["hotel"],
-        )
-
-        restaurants = self.restaurant_agent.search_restaurants(
-            location=destination,
-            dietary_restrictions=dietary or None,
-            max_results=limits["restaurant"],
-        )
-
-        activities = self.activity_agent.search_activities(
-            location=destination,
-            interests=interests or None,
-            max_results=limits["activity"],
-        )
-
-        # ── Currency conversion ────────────────────────────────────────────────
-        base = "INR"
-        for f in flights:
-            f.price = self.currency_converter.convert(f.price, f.currency, base)
-            f.currency = base
-        for h in hotels:
-            h.price_per_night = self.currency_converter.convert(h.price_per_night, h.currency, base)
-            h.currency = base
-        for r in restaurants:
-            r.average_meal_cost = self.currency_converter.convert(r.average_meal_cost, r.currency, base)
-            r.currency = base
-        for a in activities:
-            if hasattr(a, "price"):
-                a.price = self.currency_converter.convert(a.price, a.currency, base)
-                a.currency = base
-
-        # Ground transport
-        distance_km = self.ground_transport_agent.calculate_distance(
-            trip_details.get("origin_city", ""), destination)
-        ground = []
-        if distance_km <= 1000:
-            ground = self.ground_transport_agent.search_transport(
-                origin=trip_details.get("origin_city", ""),
-                destination=destination,
-                transport_types=["taxi", "train", "bus"],
-                max_results=limits["ground_transport"],
-            )
+        # SLICE from search_space instead of API calls
+        flights = _get_slice("flight", limits["flight"])
+        hotels = _get_slice("hotel", limits["hotel"])
+        restaurants = _get_slice("restaurant", limits["restaurant"])
+        activities = _get_slice("activity", limits["activity"])
+        ground = _get_slice("ground_transport", limits["ground_transport"])
         
+        print(f"      Using: {len(flights)} flights, {len(hotels)} hotels, "
+            f"{len(restaurants)} restaurants, {len(activities)} activities")
+
         transport_all = sorted(
             flights + ground,
             key=lambda t: getattr(t, 'price', float('inf'))
         )
 
-        # ✅ Cache Round 0 results
-        cached["flight"] = flights
-        cached["hotel"] = hotels
-        cached["restaurant"] = restaurants
-        cached["activity"] = activities
-        cached["ground_transport"] = ground
-
-        # ── Try to optimize with initial counts
+        # ── Try to optimize with initial counts ────────────────────────────
         result = self._optimize_with_langgraph(
             transport_all, hotels, restaurants, activities,
             num_days, budget, user_profile, trip_details,
@@ -1133,7 +1192,7 @@ Examples:
         )
 
         if is_feasible:
-            print(f"   ✅ Parallel expansion: feasible plan found in Round 0")
+            print(f"   ✅ Round 0: feasible plan found with initial slice!")
             return result
 
         cost_val = result.get('total_cost', float('inf'))
@@ -1149,64 +1208,17 @@ Examples:
             perf_monitor.start_step("Parallel Expansion Rounds")
         
         for round_num in range(max_rounds):
-            # ── INCREASE ALL LIMITS AT ONCE ────────────────────────────────────
-            print(f"   🔄 Round {round_num+1} (parallel): increasing all agents by {self.DELTA}")
-            for agent in agent_order:
-                limits[agent] += self.DELTA
-            
-            print(f"   📊 New limits: {limits}")
-            
-            # ── RE-FETCH ALL AGENTS (not cached, all fresh) ───────────────────
-            flights = self.flight_agent.search_flights(
-                origin=origin_code,
-                destination=dest_code,
-                departure_date=departure_date,
-                max_results=limits["flight"],
-            )
-            base = "INR"
-            for f in flights:
-                f.price = self.currency_converter.convert(f.price, f.currency, base)
-                f.currency = base
+            # ── INCREASE ALL limits by DELTA in parallel ───────────────────────
+            print(f"   🔄 Round {round_num+1}: advancing all agents (limits={limits})")
+            for key in limits:
+                limits[key] += self.DELTA
 
-            hotels = self.hotel_agent.search_accommodations(
-                destination=destination,
-                check_in=departure_date,
-                check_out=return_date,
-                max_results=limits["hotel"],
-            )
-            for h in hotels:
-                h.price_per_night = self.currency_converter.convert(h.price_per_night, h.currency, base)
-                h.currency = base
-
-            restaurants = self.restaurant_agent.search_restaurants(
-                location=destination,
-                dietary_restrictions=dietary or None,
-                max_results=limits["restaurant"],
-            )
-            for r in restaurants:
-                r.average_meal_cost = self.currency_converter.convert(r.average_meal_cost, r.currency, base)
-                r.currency = base
-
-            activities = self.activity_agent.search_activities(
-                location=destination,
-                interests=interests or None,
-                max_results=limits["activity"],
-            )
-            for a in activities:
-                if hasattr(a, "price"):
-                    a.price = self.currency_converter.convert(a.price, a.currency, base)
-                    a.currency = base
-
-            distance_km = self.ground_transport_agent.calculate_distance(
-                trip_details.get("origin_city", ""), destination)
-            ground = []
-            if distance_km <= 1000:
-                ground = self.ground_transport_agent.search_transport(
-                    origin=trip_details.get("origin_city", ""),
-                    destination=destination,
-                    transport_types=["taxi", "train", "bus"],
-                    max_results=limits["ground_transport"],
-                )
+            # ── NEW: Just slice deeper instead of re-fetching ────────────────────
+            flights = _get_slice("flight", limits["flight"])
+            hotels = _get_slice("hotel", limits["hotel"])
+            restaurants = _get_slice("restaurant", limits["restaurant"])
+            activities = _get_slice("activity", limits["activity"])
+            ground = _get_slice("ground_transport", limits["ground_transport"])
 
             transport_all = sorted(
                 flights + ground,
@@ -1274,29 +1286,23 @@ Examples:
         num_days: int,
         user_profile,
         trip_details: dict,
+        search_space: dict,  # NEW: Use unified search space instead of API calls!
         initial_step_size: int = 1,
         perf_monitor: Optional['PerformanceMonitor'] = None,
     ) -> Optional[dict]:
         """
-        Method 3: Sequential generation with early stopping (Memory-optimized).
+        REFACTORED: Sequential generation using pre-computed search space
         
-        Strategy:
-        - Don't pre-fetch all best options at once
-        - Instead generate options one-by-one from each agent pool
-        - Evaluate each combination immediately
-        - Stop early when feasible plan found
-        - Lower memory footprint vs other strategies
+        KEY CHANGE: No more API calls! Instead:
+        1. Accept pre-fetched, sorted-by-cost search_space from generate_itinerary()
+        2. Start with minimum required counts
+        3. If not feasible, increment counts and slice more items
+        4. Early stopping when feasible found
+        5. All methods use the SAME search_space, ensuring fair comparison
         
-        Process:
-        1. For restaurants & activities: Start with MINIMUM UNIQUE required (not just 1)
-           - Restaurants: num_days * meals_per_day (e.g., 3 days x 2 meals = 6)
-           - Activities: (num_days - 1) * activities_per_day + 1 (e.g., 2 days x 2 + 1 = 5)
-        2. For flights & hotels: Use reasonable initial_step_size (3-5)
-        3. Try optimization with current pool
-        4. If feasible found, return immediately (EARLY STOPPING)
-        5. Else, increment fetches and retry
-        
-        Advantage: First iteration tries realistic options counts, higher chance of success
+        Strategy: Memory-optimized with progressive expansion
+        - Start conservative, expand when needed
+        - Early stopping for efficiency
         """
         
         # ── PRE-CHECK: estimate minimum possible cost ──────────────────────────
@@ -1340,8 +1346,9 @@ Examples:
             return dict(
                 flights=1,
                 hotels=1,
-                restaurants=min_restaurants,       # e.g. 6 for a 3-day trip
-                activities=requested_activities,   # e.g. 10 for a 3-day trip (2x the minimum)
+                restaurants=min_restaurants,
+                activities=requested_activities,
+                ground_transport=1,
             )
         
         # ── Calculate minimum unique options required ───────────────────────────
@@ -1349,100 +1356,46 @@ Examples:
         ACTIVITIES_PER_DAY = 2
         
         min_restaurants_needed = num_days * MEALS_PER_DAY
-        # Activities: last day gets only 1, other days get ACTIVITIES_PER_DAY
         min_activities_needed = (num_days - 1) * ACTIVITIES_PER_DAY + 1
         
         print(f"   🔄 Sequential generation starting")
         print(f"      Minimum unique restaurants needed: {min_restaurants_needed}")
         print(f"      Minimum unique activities needed: {min_activities_needed}")
         
-        # ── Consecutive fetch iterations ───────────────────────────────────────
+        # ── Helper: extract slice ──────────────────────────────────────────────
+        def _get_slice(agent_name: str, count: int):
+            """Take first 'count' items from search_space[agent_name]"""
+            options = search_space.get(agent_name, [])
+            return options[:count]
+        
+        # ── Initialize starting counts ─────────────────────────────────────────
         best_plan_overall = None
         best_cost_overall = float('inf')
-        # Start with MINIMAL for flights & hotels, realistic minimum for restaurants & activities
-        # current_restaurant_count = min_restaurants_needed
-        # current_activity_count = min_activities_needed
-        # current_flight_count = 1    # Start minimal: 1 flight option
-        # current_hotel_count = 1     # Start minimal: 1 hotel option
+        
         init = _sequential_init_counts(num_days, MEALS_PER_DAY, ACTIVITIES_PER_DAY)
         current_flight_count      = init['flights']
         current_hotel_count       = init['hotels']
         current_restaurant_count  = init['restaurants']
         current_activity_count    = init['activities']
+        current_ground_count      = init['ground_transport']
+        
         # Sanity-check: never request fewer than the coverage minimum
         current_restaurant_count  = max(current_restaurant_count, min_restaurants_needed)
-        # Activities: keep the multiplied count from _sequential_init_counts (already accounts for filtering)
-        # Don't force it down to min_activities_needed, that would undo the 2x multiplier
-
-        base = "INR"
         
-        for iteration in range(5):  # Max 5 iterations (increasing diversity each time)
+        for iteration in range(5):  # Max 5 iterations
             if current_restaurant_count > 25:  # Cap at 25 options
                 break
             
             print(f"\n   📍 Iteration {iteration + 1}:")
-            print(f"      Fetching: {current_flight_count} flights | {current_hotel_count} hotels | "
+            print(f"      Slicing: {current_flight_count} flights | {current_hotel_count} hotels | "
                   f"{current_restaurant_count} restaurants | {current_activity_count} activities")
             
-            # ── Fetch from each agent with current counts ──────────────────────
-            flights = self.flight_agent.search_flights(
-                origin=origin_code,
-                destination=dest_code,
-                departure_date=departure_date,
-                max_results=current_flight_count,
-            )
-            for f in flights:
-                f.price = self.currency_converter.convert(f.price, f.currency, base)
-                f.currency = base
-
-            hotels = self.hotel_agent.search_accommodations(
-                destination=destination,
-                check_in=departure_date,
-                check_out=return_date,
-                max_results=current_hotel_count,
-            )
-            for h in hotels:
-                h.price_per_night = self.currency_converter.convert(
-                    h.price_per_night, h.currency, base)
-                h.currency = base
-
-            restaurants = self.restaurant_agent.search_restaurants(
-                location=destination,
-                dietary_restrictions=dietary or None,
-                max_results=current_restaurant_count,
-            )
-            for r in restaurants:
-                r.average_meal_cost = self.currency_converter.convert(
-                    r.average_meal_cost, r.currency, base)
-                r.currency = base
-
-            activities = self.activity_agent.search_activities(
-                location=destination,
-                interests=interests or None,
-                max_results=current_activity_count,
-            )
-            for a in activities:
-                if hasattr(a, "price"):
-                    a.price = self.currency_converter.convert(a.price, a.currency, base)
-                    a.currency = base
-
-            distance_km = self.ground_transport_agent.calculate_distance(
-                trip_details.get("origin_city", ""), destination)
-            ground = []
-            current_step_size = max(
-                current_flight_count,
-                current_hotel_count,
-                current_restaurant_count,
-                current_activity_count,
-                5
-            )
-            if distance_km <= 1000:
-                ground = self.ground_transport_agent.search_transport(
-                    origin=trip_details.get("origin_city", ""),
-                    destination=destination,
-                    transport_types=["taxi", "train", "bus"],
-                    max_results=current_step_size,
-                )
+            # ── SLICE from pre-computed search_space instead of API calls ───────
+            flights = _get_slice("flight", current_flight_count)
+            hotels = _get_slice("hotel", current_hotel_count)
+            restaurants = _get_slice("restaurant", current_restaurant_count)
+            activities = _get_slice("activity", current_activity_count)
+            ground = _get_slice("ground_transport", current_ground_count)
 
             transport_all = sorted(
                 flights + ground,
@@ -1453,7 +1406,7 @@ Examples:
                   f"🍽️  {len(restaurants)} restaurants | 🎭 {len(activities)} activities | "
                   f"🚗 {len(ground)} ground transport")
 
-            # ── Try to optimize with current pool ───────────────────────────────
+            # ── Try to optimize with current slices ────────────────────────────
             result = self._optimize_with_langgraph(
                 transport_all, hotels, restaurants, activities,
                 num_days, budget, user_profile, trip_details,
@@ -1484,12 +1437,13 @@ Examples:
                   f"expanding pools...")
             
             # ── Increment for next iteration ────────────────────────────────────
-            # Increase restaurant & activity by 2 each (to get more diversity)
-            # Increase flight & hotel by 1 each (minor adjustment)
+            # Increase restaurant & activity by 2 each (deeper slices get more variety)
+            # Increase flight & hotel by 1 each (conservative expansion)
             current_restaurant_count += 3
             current_activity_count += 2
             current_flight_count += 1
             current_hotel_count += 1
+            current_ground_count += 1
 
         # ── End of iterations ──────────────────────────────────────────────────
         print(f"   ❌ Sequential generation: no feasible plan after {iteration + 1} iterations")

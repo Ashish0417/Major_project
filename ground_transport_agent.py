@@ -450,6 +450,9 @@ def extract_price(text):
 def get_transport_rates(city: str):
     """Scrape taxi start fare, taxi per km, local transport ticket."""
 
+    if not city:
+        return None
+
     try:
         city_url = city.replace(" ", "-")
         url = f"https://www.numbeo.com/cost-of-living/in/{city_url}"
@@ -541,6 +544,9 @@ class GroundTransportAgent:
 
     def calculate_distance(self, origin, dest):
 
+        if not origin or not dest:
+            return 500
+
         if origin.lower() not in self.city_coords or dest.lower() not in self.city_coords:
             return 500
 
@@ -568,6 +574,9 @@ class GroundTransportAgent:
                          transport_types=None,
                          max_price=None,
                          max_results=10):
+
+        if not origin: origin = "Unknown"
+        if not destination: destination = "Unknown"
 
         if transport_types is None:
             transport_types = ['taxi', 'bus']

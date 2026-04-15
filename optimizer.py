@@ -40,11 +40,12 @@ class ItineraryOptimizer:
         self.solver = cp_model.CpSolver()
         self.last_solve_status = None  # Store the solve status
 
-        # Weights for objective function (user-adjustable)
-        self.weight_cost = 0.3
-        self.weight_time = 0.2
-        self.weight_preference = 0.3
-        self.weight_popularity = 0.2
+        # Weights for objective function (read from user_profile)
+        prefs = self.user_profile.travel_preferences if self.user_profile else None
+        self.weight_cost = getattr(prefs, 'weight_cost', 0.3) if prefs else 0.3
+        self.weight_time = getattr(prefs, 'weight_time', 0.2) if prefs else 0.2
+        self.weight_preference = getattr(prefs, 'weight_preference', 0.3) if prefs else 0.3
+        self.weight_popularity = getattr(prefs, 'weight_popularity', 0.2) if prefs else 0.2
 
     def optimize_itinerary(self,
                           flights: List[Any],
@@ -228,7 +229,8 @@ class ItineraryOptimizer:
     def _add_budget_constraint(self, items, item_vars):
         """Budget constraint: total cost <= budget"""
         prefs = self.user_profile.travel_preferences
-        if not prefs:
+        if not prefs or getattr(prefs, 'budget_total', None) is None or prefs.budget_total <= 0:
+            print("  ✓ Skipping budget constraint (no budget specified)")
             return
 
         total_budget = prefs.budget_total

@@ -11,12 +11,49 @@ NEW: LangGraph optimizer for parallel exploration with dynamic constraints
 """
 
 import os
-from typing import Optional, Union, Tuple, List
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
+from typing import Optional, Union, Dict, Any, List
 from dotenv import load_dotenv
-
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.schema import HumanMessage
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage, HumanMessage
+import sys
+import threading
+import asyncio
+
+class ThreadSafeStdout:
+    def __init__(self, original):
+        self._original_stdout = original
+        self._local = threading.local()
+
+    def register(self, writer):
+        self._local.writer = writer
+        
+    def unregister(self):
+        if hasattr(self._local, 'writer'):
+            del self._local.writer
+
+    def write(self, text):
+        self._original_stdout.write(text)
+        writer = getattr(self._local, 'writer', None)
+        if writer:
+            writer.write(text)
+
+    def flush(self):
+        self._original_stdout.flush()
+        writer = getattr(self._local, 'writer', None)
+        if writer:
+            writer.flush()
+            
+    def __getattr__(self, name):
+        return getattr(self._original_stdout, name)
+
+# Apply global thread-safe patches for stdout and stderr to stream logs to web
+if not isinstance(sys.stdout, ThreadSafeStdout):
+    sys.stdout = ThreadSafeStdout(sys.stdout)
+if not isinstance(sys.stderr, ThreadSafeStdout):
+    sys.stderr = ThreadSafeStdout(sys.stderr)
 
 # Import existing agents and utilities
 from flight_agent import FlightAgent
@@ -218,7 +255,7 @@ class TravelItineraryOrchestrator:
         self.trend_analyzer = TrendAnalyzer()
         self.currency_converter = CurrencyConverter()
         self.history_manager = HistoryManager(
-            use_mongodb=os.getenv("USE_MONGODB", "false").lower() in ("1", "true", "yes"),
+            use_mongodb=os.getenv("USE_MONGODB", "true").lower() in ("1", "true", "yes"),
             mongo_uri=os.getenv("MONGO_URI", "mongodb://localhost:27017")
         )
         
@@ -3474,7 +3511,7 @@ Examples:
         except Exception as e:
             print(f"   ⚠️ Transport error: {e}")
             self.display_itinerary(itinerary, trip_details)
-    
+        
     # ============================================================================
     # ITINERARY SELECTION & STORAGE (NEW)
     # ============================================================================
@@ -3608,67 +3645,72 @@ Examples:
             print(f"\n❌ Error saving itinerary: {e}")
             return False
     
-    def ask(self, query: str, user_id: Optional[str] = None) -> str:
-        """Handle natural language queries."""
-
+        return itinerary
+    
+    async def ask_stream(self, query: str, user_id: Optional[str] = None):
+        """Handle natural language queries with streaming asynchronously."""
         user_id = user_id or os.getenv('DEFAULT_USER_ID', 'anonymous')
-        user_context = self.get_user_context(user_id)
-
-        if user_context:
-            print(f"🧾 Loaded context for user {user_id}:")
-            print(user_context)
-
-        print("\n🧠 Understanding your request...")
-
-        # Check if it's a trip planning request
+        
+        yield "🧠 Understanding your request...\n\n"
+        
         if any(word in query.lower() for word in ['plan', 'trip', 'itinerary', 'travel', 'visit']):
             trip_details = self.extract_trip_details(query)
             trip_details['user_id'] = user_id  # Add user_id for storage
             trip_details['query'] = query  # Add original query
 
             if trip_details.get('destination_city'):
-                result = self.generate_itinerary(trip_details)
+                yield "🌍 Planning your itinerary! This can take about 20-30 seconds to run constraints. Please wait... ⏳\n\n"
+                
+                import asyncio
+                loop = asyncio.get_running_loop()
+                q = asyncio.Queue()
 
-                # Check if itinerary generation succeeded
-                if result is None:
-                    error_response = (
-                        "❌ ITINERARY GENERATION FAILED\n"
-                        "═" * 50 + "\n"
-                        "The budget specified may be too low to create a feasible itinerary,\n"
-                        "or there was an error generating your trip plan.\n"
-                        f"Destination: {trip_details.get('destination_city')}\n"
-                        f"Days: {trip_details.get('num_days')}\n"
-                        f"Budget: ₹{trip_details.get('budget_inr', 'Not specified'):,}\n\n"
-                        "💡 Try increasing your budget or adjusting your preferences."
-                    )
-                    if user_id != 'anonymous':
-                        self.history_manager.store_conversation(user_id, query, error_response, 
-                                                              {'destination': trip_details.get('destination_city'),
-                                                               'status': 'generation_failed'})
-                    return error_response
+                def run_itinerary():
+                    class AsyncQueueWriter:
+                        def __init__(self, lp, queue):
+                            self.lp = lp
+                            self.queue = queue
+                        def write(self, text):
+                            if text:
+                                self.lp.call_soon_threadsafe(self.queue.put_nowait, text)
+                        def flush(self): pass
 
-                # Capture itinerary output as text for storage
-                import io
-                import sys
+                    writer = AsyncQueueWriter(loop, q)
+                    sys.stdout.register(writer)
+                    sys.stderr.register(writer)
+                    try:
+                        return self.generate_itinerary(trip_details)
+                    finally:
+                        sys.stdout.unregister()
+                        sys.stderr.unregister()
+                        loop.call_soon_threadsafe(q.put_nowait, None)
+
+                thread_task = asyncio.create_task(asyncio.to_thread(run_itinerary))
                 
-                captured_output = io.StringIO()
-                old_stdout = sys.stdout
-                sys.stdout = captured_output
-                
-                try:
-                    # Display itinerary (output goes to capture)
-                    self.display_itinerary_text(result, trip_details)
-                finally:
-                    sys.stdout = old_stdout
-                
-                itinerary_response = captured_output.getvalue()
-                
-                # Print to actual console
-                print(itinerary_response)
-                
-                # Save trip history entry for RAG and store conversation
+                # Stream logs as they come in via the queue
+                yield "```text\n"
+                while True:
+                    try:
+                        val = await asyncio.wait_for(q.get(), timeout=0.1)
+                        if val is None:
+                            break
+                        
+                        # Sanitize html characters
+                        safe_val = str(val).replace("<", "&lt;").replace(">", "&gt;")
+                        
+                        # Stream the terminal logs smoothly, ~3 chars at a time
+                        for i in range(0, len(safe_val), 3):
+                            yield safe_val[i:i+3]
+                            await asyncio.sleep(0.005)
+                    except asyncio.TimeoutError:
+                        if thread_task.done():
+                            break
+                yield "\n```\n\n"
+
+                result = await thread_task
+
                 if user_id != 'anonymous':
-                    trip_data = {
+                    self.history_manager.store_trip_history(user_id, {
                         'origin_city': trip_details.get('origin_city'),
                         'destination': trip_details.get('destination_city'),
                         'departure_date': trip_details.get('departure_date'),
@@ -3679,24 +3721,47 @@ Examples:
                         'generated_at': datetime.now().isoformat(),
                         'query': query,
                         'result_summary': 'Itinerary generated'
-                    }
-                    self.history_manager.store_trip_history(user_id, trip_data)
-                    # Store the complete itinerary response
-                    self.history_manager.store_conversation(user_id, query, itinerary_response, trip_data)
-                    # Also store as raw itinerary output
-                    self.history_manager.store_itinerary_output(user_id, itinerary_response, trip_data)
+                    })
 
-                return itinerary_response
+                yield "\n✅ Optimization complete! Formatting your schedule...\n\n"
+                import json
+                if not result:
+                     yield "❌ I wasn't able to plan a viable trip matching your constraints."
+                     return
+                
+                try:
+                    json_str = json.dumps(result, default=str)[:15000]
+                    prompt = (
+                        "You are a master Travel Agent. I have computed an optimal multi-day travel itinerary. "
+                        "Format the following JSON itinerary into a beautiful, detailed day-by-day markdown schedule. Use emojis. "
+                        "Be friendly. Do not just summarize, explicitly list the detailed schedule with times, places, prices, and total budget information.\n\n"
+                        f"USER QUERY: {query}\n\n"
+                        f"JSON ITINERARY:\n{json_str}"
+                    )
+                    
+                    from langchain_core.messages import HumanMessage
+                    async for chunk in self.llm.astream([HumanMessage(content=prompt)]):
+                        # Split by space and yield to simulate smooth typewriter effect quickly
+                        words = chunk.content.split(' ')
+                        for i, word in enumerate(words):
+                            yield word + (' ' if i < len(words) - 1 else '')
+                            # Adding tiny delay to make buffering less likely to chunk paragraphs
+                            await asyncio.sleep(0.005)
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    yield f"\n\nError streaming LLM response: {str(e)}"
             else:
-                response = "❓ I need at least a destination city. Example: 'Plan a trip to Paris from Bangalore'"
-                if user_id != 'anonymous':
-                    self.history_manager.store_conversation(user_id, query, response)
-                return response
+                yield "❓ I need at least a destination city."
+        else:
+            yield "❓ I specialize in planning complete trip itineraries."
 
-        response = "❓ I specialize in planning complete trip itineraries. Try: 'Plan a trip from Bangalore to Paris for 5 days'"
-        if user_id != 'anonymous':
-            self.history_manager.store_conversation(user_id, query, response)
-        return response
+    def ask(self, query: str, user_id: Optional[str] = None) -> str:
+        """Handle natural language queries."""
+        import asyncio
+        async def _collect():
+            return "".join([c async for c in self.ask_stream(query, user_id)])
+        return asyncio.run(_collect())
 
     def interactive(self):
         """Interactive mode"""

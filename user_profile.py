@@ -10,19 +10,27 @@ from dataclasses import dataclass, asdict
 import uuid
 
 
+from dataclasses import dataclass, asdict, field
+
 @dataclass
 class TravelPreferences:
     """Travel preferences dataclass"""
-    budget_total: float
-    budget_per_day: float
-    comfort_level: str  # economy / premium / luxury
-    transport_pref: List[str]  # flight, train, bus, car
-    accommodation_pref: List[str]  # hotel, apartment, hostel
-    dietary_restrictions: List[str]
-    activity_interests: List[str]
-    avoid: List[str]
+    budget_total: Optional[float] = None
+    budget_per_day: Optional[float] = None
+    comfort_level: str = "economy"
+    transport_pref: List[str] = field(default_factory=list)
+    accommodation_pref: List[str] = field(default_factory=list)
+    dietary_restrictions: List[str] = field(default_factory=list)
+    activity_interests: List[str] = field(default_factory=list)
+    avoid: List[str] = field(default_factory=list)
     max_daily_travel_minutes: int = 90
     max_activities_per_day: int = 4
+    
+    # Optimizer Weights inferred from generic preferences
+    weight_cost: float = 0.3
+    weight_time: float = 0.2
+    weight_preference: float = 0.3
+    weight_popularity: float = 0.2
 
 
 @dataclass
@@ -143,18 +151,11 @@ class UserProfile:
         if not self.name:
             errors.append("User name is required")
 
-        if not self.destinations:
-            errors.append("At least one destination is required")
-
-        if not self.dates:
-            errors.append("Travel dates are required")
-
-        if not self.travel_preferences:
-            errors.append("Travel preferences are required")
-        else:
-            # Validate preferences
-            if self.travel_preferences.budget_total <= 0:
-                errors.append("Budget total must be positive")
+        # Removed strict validation for destinations and dates since we guess them initially!
+        
+        if self.travel_preferences:
+            if self.travel_preferences.budget_total is not None and self.travel_preferences.budget_total < 0:
+                errors.append("Budget total must be non-negative")
 
             if self.travel_preferences.comfort_level not in ['economy', 'premium', 'luxury']:
                 errors.append("Comfort level must be economy, premium, or luxury")

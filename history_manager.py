@@ -525,7 +525,7 @@ class HistoryManager:
 
 if __name__ == "__main__":
     # Test the History Manager
-    manager = HistoryManager(use_mongodb=False)
+    manager = HistoryManager(use_mongodb=True)
 
     print("History Manager Test")
     print("Using in-memory storage")

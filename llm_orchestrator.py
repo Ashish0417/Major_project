@@ -13,7 +13,7 @@ NEW: LangGraph optimizer for parallel exploration with dynamic constraints
 import os
 import json
 from datetime import datetime
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, Tuple
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import ChatPromptTemplate

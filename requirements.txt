@@ -35,3 +35,15 @@ pydantic==2.8.2
 
 # === Performance Monitoring ===
 psutil==6.0.0
+
+# === Web Framework & Auth ===
+fastapi
+uvicorn
+PyJWT
+passlib[bcrypt]
+email-validator
+
+# === ML Inference (Required for feedback route) ===
+scikit-learn
+sentence-transformers
+joblib

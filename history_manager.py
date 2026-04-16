@@ -310,6 +310,102 @@ class HistoryManager:
             print(f"Error retrieving feedback: {e}")
             return []
 
+    def store_raw_feedback(self, user_id: str, trip_id: str, feedback_text: str) -> bool:
+        """Store raw textual feedback from user post-trip."""
+        try:
+            entry = {
+                'user_id': user_id,
+                'trip_id': trip_id,
+                'feedback_text': feedback_text,
+                'submitted_at': datetime.now().isoformat()
+            }
+            if self.use_mongodb:
+                self.db['feedback_history'].insert_one(entry)
+            else:
+                if 'feedback_history' not in self.memory_storage:
+                    self.memory_storage['feedback_history'] = []
+                self.memory_storage['feedback_history'].append(entry)
+            
+            print(f"Stored raw ML task feedback for user {user_id}")
+            return True
+        except Exception as e:
+            print(f"Error storing raw feedback: {e}")
+            return False
+
+    def update_optimizer_weights(self, user_id: str, deltas: Dict[str, float], lr: float = 0.10) -> Optional[Dict[str, float]]:
+        """Update user preferences based on ML deltas with clamping and normalization."""
+        try:
+            profile_dict = self.get_user_profile(user_id)
+            if not profile_dict:
+                print(f"Profile not found for {user_id}, initializing generic layout.")
+                profile_dict = {'user_id': user_id}
+            
+            prefs = profile_dict.get('travel_preferences', {})
+            if not prefs:
+                prefs = {}
+            
+            # Fetch existing or set initial defaults
+            old_weights = {
+                'cost': prefs.get('weight_cost', 0.30),
+                'time': prefs.get('weight_time', 0.20),
+                'pref': prefs.get('weight_preference', 0.30),
+                'pop':  prefs.get('weight_popularity', 0.20)
+            }
+            
+            new_weights = {}
+            for k in old_weights:
+                val = old_weights[k] + lr * deltas.get(k, 0.0)
+                # Clamp at 0.05 minimum
+                new_weights[k] = max(0.05, val)
+                
+            # Normalize so sum = 1
+            total = sum(new_weights.values())
+            if total > 0:
+                for k in new_weights:
+                    new_weights[k] = round(new_weights[k] / total, 3)
+            else:
+                new_weights = {'cost': 0.3, 'time': 0.2, 'pref': 0.3, 'pop': 0.2}
+
+            print(f"\n📊 ML Weight Matrix Updated for {user_id}:")
+            print(f"   Old   : {old_weights}")
+            print(f"   Deltas: {deltas} (LR={lr})")
+            print(f"   New   : {new_weights}\n")
+
+            # Prepare update object
+            prefs['weight_cost'] = new_weights['cost']
+            prefs['weight_time'] = new_weights['time']
+            prefs['weight_preference'] = new_weights['pref']
+            prefs['weight_popularity'] = new_weights['pop']
+            profile_dict['travel_preferences'] = prefs
+            
+            old_count = profile_dict.get('feedback_count', 0)
+            profile_dict['feedback_count'] = old_count + 1
+            profile_dict['last_feedback_at'] = datetime.now().isoformat()
+            
+            # Save back to DB
+            if self.use_mongodb:
+                self.collection.update_one(
+                    {'user_id': user_id},
+                    {'$set': {
+                        'travel_preferences': prefs, 
+                        'feedback_count': profile_dict['feedback_count'],
+                        'last_feedback_at': profile_dict['last_feedback_at']
+                    }},
+                    upsert=True
+                )
+            else:
+                if user_id not in self.memory_storage['users']:
+                    self.memory_storage['users'][user_id] = profile_dict
+                self.memory_storage['users'][user_id].update(profile_dict)
+                
+            return new_weights
+            
+        except Exception as e:
+            print(f"Error updating optimizer weights: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def cluster_users(self, num_clusters: int = 5) -> Dict[str, List[str]]:
         """
         Cluster users based on preferences using K-Means

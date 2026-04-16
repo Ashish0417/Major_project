@@ -352,11 +352,12 @@ class ActivityAgent:
                          min_rating: float = 3.5,
                          max_results: int = 15) -> List[ActivityOption]:
         """
-        Search for activities and experiences using real APIs.
-
-        Strategy (in priority order, retried indefinitely — no mock data):
-        1. Google Places API (if key is set)
-        2. Overpass API (all servers, round-robin)
+        Search for activities and experiences using real APIs
+        
+        Strategy:
+        1. Try Google Places API (if key available)
+        2. Fall back to Overpass API
+        3. Fall back to mock data
         """
         print(f"\n🎯 Searching activities in {location}...")
         
@@ -364,53 +365,56 @@ class ActivityAgent:
         coords = self._get_coordinates(location)
         if not coords:
             print(f"   ⚠️ Could not geocode {location}, using default coordinates")
+            # Use city defaults or reasonable defaults
             coords = self._get_default_coords(location)
         
         lat, lon = coords
         print(f"   ✓ Location: {location} ({lat:.4f}, {lon:.4f})")
         
-        attempt = 0
-        base_wait = 2.0
-        max_wait  = 30.0
-
-        while True:
-            activities = []
-
-            # Try Google Places API first (if key is available)
-            if self.google_api_key:
-                print(f"   🔍 Trying Google Places API (attempt {attempt + 1})...")
-                try:
-                    activities = self._search_google_places(
-                        lat, lon, location, categories, max_results
-                    )
-                except Exception as e:
-                    print(f"   ⚠️  Google Places failed: {str(e)[:50]}")
-
-            # If Google fails or no key, try Overpass (single pass through servers)
-            if not activities:
-                print(f"   🔍 Trying Overpass API (attempt {attempt + 1})...")
-                activities = self._search_overpass_once(
+        activities = []
+        
+        # Try Google Places API first
+        if self.google_api_key:
+            print(f"   🔍 Trying Google Places API...")
+            try:
+                activities = self._search_google_places(
                     lat, lon, location, categories, max_results
                 )
-
-            if activities:
-                # Filter by interests
-                if interests:
-                    activities = self.filter_by_interests(activities, interests)
-                if max_price:
-                    activities = [a for a in activities if a.price <= max_price]
-                if max_duration_minutes:
-                    activities = [a for a in activities if a.duration_minutes <= max_duration_minutes]
-                activities = self.rank_activities(activities)
-                print(f"   ✅ Returning {len(activities[:max_results])} real activities")
-                return activities[:max_results]
-
-            # All sources failed this pass — wait and retry
-            attempt += 1
-            wait = min(base_wait * attempt, max_wait)
-            print(f"   🔄 All activity sources failed (pass {attempt}). "
-                  f"Retrying in {wait:.1f}s...")
-            time.sleep(wait)
+            except Exception as e:
+                print(f"   ⚠️  Google Places failed: {str(e)[:50]}")
+        
+        # If Google fails or no key, try Overpass
+        if not activities:
+            print(f"   🔍 Trying Overpass API...")
+            try:
+                activities = self._search_overpass(
+                    lat, lon, location, categories, max_results
+                )
+            except Exception as e:
+                print(f"   ⚠️  Overpass failed: {str(e)[:50]}")
+        
+        # If both fail, use mock data WITH PROPER COORDINATES
+        if not activities:
+            print(f"   ⚠️ All APIs failed, generating mock data")
+            activities = self._generate_mock_activities(
+                location, categories, max_results, coords=coords
+            )
+        
+        # Filter by interests
+        if interests:
+            activities = self.filter_by_interests(activities, interests)
+        
+        # Filter by constraints
+        if max_price:
+            activities = [a for a in activities if a.price <= max_price]
+        if max_duration_minutes:
+            activities = [a for a in activities if a.duration_minutes <= max_duration_minutes]
+        
+        # Rank activities
+        activities = self.rank_activities(activities)
+        
+        print(f"   ✅ Returning {len(activities)} activities")
+        return activities[:max_results]
 
     def _get_coordinates(self, location: str) -> Optional[tuple]:
         """Get coordinates from location name using Nominatim"""
@@ -564,12 +568,12 @@ class ActivityAgent:
             print(f"   ⚠️ Parse error: {str(e)[:30]}")
             return None
 
-    def _search_overpass_once(self, lat: float, lon: float,
-                              location: str, categories: Optional[List[str]],
-                              max_results: int) -> List[ActivityOption]:
-        """Single pass through all Overpass servers. Returns [] if all fail.
-        The caller (search_activities) handles retrying across passes.
-        """
+    def _search_overpass(self, lat: float, lon: float,
+                        location: str, categories: Optional[List[str]],
+                        max_results: int) -> List[ActivityOption]:
+        """Search using Overpass API (OpenStreetMap)"""
+        
+        # Map categories to OSM tags
         osm_mapping = {
             'museums': ['museum'],
             'cultural': ['museum', 'theatre', 'arts_centre'],
@@ -577,66 +581,64 @@ class ActivityAgent:
             'tour': ['attraction', 'viewpoint'],
             'adventure': ['park', 'attraction']
         }
-
-        tags_to_search: set = set()
+        
+        # Determine tags to search
+        tags_to_search = set()
         if categories:
             for cat in categories:
                 if cat in osm_mapping:
                     tags_to_search.update(osm_mapping[cat])
-        if not tags_to_search:
+        else:
             tags_to_search = {'museum', 'attraction', 'park', 'viewpoint'}
-
+        
+        # Try each Overpass server
         for server_index, overpass_url in enumerate(self.overpass_urls, 1):
             try:
                 print(f"      Trying Overpass server {server_index}/{len(self.overpass_urls)}...")
+                
                 self._apply_rate_limit()
-
+                
+                # Build query
                 radius_km = 10
                 lat1 = lat - (radius_km / 111.0)
                 lon1 = lon - (radius_km / 111.0)
                 lat2 = lat + (radius_km / 111.0)
                 lon2 = lon + (radius_km / 111.0)
-
+                
                 query_parts = []
                 for tag in tags_to_search:
                     query_parts.append(f'node["tourism"="{tag}"]({lat1},{lon1},{lat2},{lon2});')
                     query_parts.append(f'way["tourism"="{tag}"]({lat1},{lon1},{lat2},{lon2});')
-
+                
                 query = f"""[out:json][timeout:15];
 (
   {'  '.join(query_parts)}
 );
 out center {max_results * 2};
 """
-
+                
                 response = requests.post(
-                    overpass_url, data=query,
-                    headers=self.headers, timeout=20
+                    overpass_url,
+                    data=query,
+                    headers=self.headers,
+                    timeout=20
                 )
-
+                
                 if response.status_code == 200:
                     data = response.json()
-                    activities = self._parse_overpass_results(data, location, categories)
+                    activities = self._parse_overpass_results(
+                        data, location, categories
+                    )
+                    
                     if activities:
-                        print(f"      ✅ Server {server_index} succeeded with "
-                              f"{len(activities)} real activities")
+                        print(f"      ✅ Server {server_index} succeeded!")
                         return activities[:max_results]
-                    else:
-                        print(f"      ⚠️ Server {server_index} returned 0 results")
-                else:
-                    print(f"      ⚠️ Server {server_index} HTTP {response.status_code}")
-
+                
             except Exception as e:
-                print(f"      ⚠️ Server {server_index} error: {str(e)[:40]}")
-
-        return []  # Caller will retry
-
-    # Keep the old name as an alias for any internal callers
-    def _search_overpass(self, lat: float, lon: float,
-                        location: str, categories: Optional[List[str]],
-                        max_results: int) -> List[ActivityOption]:
-        """Alias for _search_overpass_once (for backwards compatibility)."""
-        return self._search_overpass_once(lat, lon, location, categories, max_results)
+                print(f"      ⚠️ Server {server_index} error: {str(e)[:30]}")
+                continue
+        
+        return []
 
     def _parse_overpass_results(self, data: dict, location: str,
                                 categories: Optional[List[str]]) -> List[ActivityOption]:

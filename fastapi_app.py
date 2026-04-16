@@ -487,6 +487,7 @@ from datetime import datetime, timedelta
 
 from llm_orchestrator import TravelItineraryOrchestrator
 from user_profile import UserProfile, TravelPreferences, ContactInfo
+from feedback_predictor import predictor
 
 app = FastAPI(title="Travel Planner API")
 orchestrator = TravelItineraryOrchestrator()
@@ -512,6 +513,11 @@ class LoginRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     query: str
+
+class ModelFeedbackRequest(BaseModel):
+    user_id: str
+    trip_id: str
+    feedback: str
 
 # ================= UTILS =================
 def get_password_hash(password):
@@ -617,6 +623,27 @@ async def chat(req: ChatRequest, user_id: str = Depends(get_current_user_id)):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+# ================= FEEDBACK PIPELINE =================
+@app.post("/api/update_feedback")
+def update_feedback(req: ModelFeedbackRequest):
+    # Step 2: Store feedback in DB
+    history_manager.store_raw_feedback(req.user_id, req.trip_id, req.feedback)
+    
+    # Step 3: Predict weights from textual feedback using SentenceTransformers + Random Forest
+    deltas = predictor.predict_weights_delta(req.feedback)
+    
+    # Step 4, 5, 6, 7: Fetch existing weights, Apply LR update, Clamp, Normalize, Log, Save
+    if deltas:
+        new_weights = history_manager.update_optimizer_weights(req.user_id, deltas)
+        return {
+            "status": "success", 
+            "predicted_deltas": deltas, 
+            "new_weights": new_weights
+        }
+    else:
+        # Fallback requirement: safely store but don't break
+        return {"status": "stored_only", "message": "Feedback safely stored, but NLP prediction failed"}
+
 # ================= FRONTEND =================
 HTML = """
 <!DOCTYPE html>
@@ -669,6 +696,16 @@ button { padding:10px; width:100%; margin-top:10px; }
 <div id="messages" class="messages"></div>
 <input id="queryInput" placeholder="Ask...">
 <button onclick="sendMessage()">Send</button>
+
+<hr style="margin-top:20px;">
+<div style="background:#e8f0fe; padding:15px; border-radius:10px; margin-top:20px;">
+<h4>Submit Post-Trip Feedback (ML Auto-Tunes Preferences)</h4>
+<input id="tripIdInput" value="trip_789" style="padding:5px; width:100%; box-sizing:border-box;"><br><br>
+<textarea id="feedbackInput" rows="3" style="width:100%; padding:5px; box-sizing:border-box;" placeholder="e.g. Trip was expensive and too rushed but I loved hidden gems"></textarea>
+<button style="background:#28a745; color:#fff;" onclick="sendFeedback()">Submit Feedback</button>
+<pre id="feedbackResult" style="font-size:12px; overflow-x:auto; margin-top:10px;"></pre>
+</div>
+
 </div>
 
 </div>
@@ -756,6 +793,24 @@ const {done,value}=await reader.read();
 if(done) break;
 txt+=decoder.decode(value);
 div.innerHTML=txt;
+}
+}
+
+async function sendFeedback(){
+try {
+    let uid = "anonymous";
+    if (token) {
+        const payloadStr = atob(token.split('.')[1]);
+        uid = JSON.parse(payloadStr).sub;
+    }
+    const data = await apiCall('/api/update_feedback', {
+        user_id: uid,
+        trip_id: document.getElementById('tripIdInput').value || 'trip_unknown',
+        feedback: document.getElementById('feedbackInput').value || 'Good trip'
+    }, true);
+    document.getElementById('feedbackResult').innerText = JSON.stringify(data, null, 2);
+} catch(e) {
+    document.getElementById('feedbackResult').innerText = "Error: " + e.message;
 }
 }
 </script>

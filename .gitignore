@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+
+travel_agent_env/
+
+.env
+.idea/
+.vscode/
+
+catboost_info/

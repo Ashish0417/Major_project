@@ -1,0 +1,484 @@
+"""
+Itinerary Optimizer Module
+Uses OR-Tools CP-SAT solver for constraint-based optimization
+FIXED: Corrected CpSolverStatus enum access
+"""
+
+from ortools.sat.python import cp_model
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+import math
+
+
+@dataclass
+class ItineraryItem:
+    """Single itinerary item"""
+    item_id: str
+    item_type: str  # flight, accommodation, restaurant, activity
+    name: str
+    day: int
+    start_time: int  # Minutes from day start (0-1440)
+    duration: int  # Minutes
+    cost: float
+    latitude: float
+    longitude: float
+    preference_score: float  # 0-1
+    popularity_score: float  # 0-1
+    mandatory: bool = False
+
+
+class ItineraryOptimizer:
+    """
+    Unified Planner Agent with Budget-Aware Optimization
+    Uses OR-Tools CP-SAT solver
+    """
+
+    def __init__(self, user_profile):
+        """Initialize optimizer with user profile"""
+        self.user_profile = user_profile
+        self.model = cp_model.CpModel()
+        self.solver = cp_model.CpSolver()
+        self.last_solve_status = None  # Store the solve status
+
+        # Weights for objective function (read from user_profile)
+        prefs = self.user_profile.travel_preferences if self.user_profile else None
+        self.weight_cost = getattr(prefs, 'weight_cost', 0.3) if prefs else 0.3
+        self.weight_time = getattr(prefs, 'weight_time', 0.2) if prefs else 0.2
+        self.weight_preference = getattr(prefs, 'weight_preference', 0.3) if prefs else 0.3
+        self.weight_popularity = getattr(prefs, 'weight_popularity', 0.2) if prefs else 0.2
+
+    def optimize_itinerary(self,
+                          flights: List[Any],
+                          accommodations: List[Any],
+                          restaurants: List[Any],
+                          activities: List[Any],
+                          num_days: int) -> Dict[str, Any]:
+        """
+        Main optimization function
+
+        Returns:
+            Optimized itinerary with day-by-day breakdown
+        """
+        print("Starting itinerary optimization...")
+
+        # Prepare items
+        all_items = self._prepare_items(flights, accommodations, restaurants, 
+                                       activities, num_days)
+
+        if not all_items:
+            return {"error": "No items to optimize"}
+
+        print(f"Prepared {len(all_items)} items for optimization")
+
+        # Create decision variables using item_id as key
+        item_vars = {}
+        items_by_id = {}  # Map item_id to item object
+
+        for item in all_items:
+            var_name = f"{item.item_type}_{item.item_id}"
+            item_vars[item.item_id] = self.model.NewBoolVar(var_name)
+            items_by_id[item.item_id] = item
+
+        # Add constraints
+        self._add_budget_constraint(all_items, item_vars)
+        self._add_time_constraints(all_items, item_vars, num_days)
+        self._add_activity_limit_constraint(all_items, item_vars, num_days)
+        self._add_mandatory_constraints(all_items, item_vars)
+        self._add_logical_constraints(all_items, item_vars, num_days)
+
+        # Define objective function
+        self._set_objective(all_items, item_vars)
+
+        # Solve
+        print("Solving optimization problem...")
+        self.last_solve_status = self.solver.Solve(self.model)
+
+        # FIXED: Use integer comparison and get status name safely
+        status_name = self._get_status_name(self.last_solve_status)
+
+        # Check if solution is optimal (4) or feasible (2)
+        if self.last_solve_status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            print(f"Solution found! Status: {status_name}")
+            return self._extract_solution(all_items, item_vars, items_by_id, num_days)
+        else:
+            print(f"No solution found. Status: {status_name}")
+            return {"error": "No feasible solution found", "status": status_name}
+
+    def _get_status_name(self, status_code: int) -> str:
+        """
+        Convert solver status code to string name
+        FIXED: Direct mapping instead of using enum
+
+        Status codes:
+        0 = UNKNOWN
+        1 = MODEL_INVALID
+        2 = FEASIBLE
+        3 = INFEASIBLE
+        4 = OPTIMAL
+        """
+        status_names = {
+            0: "UNKNOWN",
+            1: "MODEL_INVALID",
+            2: "FEASIBLE",
+            3: "INFEASIBLE",
+            4: "OPTIMAL"
+        }
+        return status_names.get(status_code, f"UNKNOWN_STATUS_{status_code}")
+
+    def _prepare_items(self, flights, accommodations, restaurants, 
+                      activities, num_days) -> List[ItineraryItem]:
+        """Convert agent proposals to ItineraryItems"""
+        items = []
+
+        # Add transport (flights or ground transport)
+        for i, transport in enumerate(flights[:10]):  # Top 10 transport options
+            # Determine if it's a flight or ground transport
+            if hasattr(transport, 'carrier'):
+                # It's a flight
+                item_type = "flight"
+                name = f"{transport.carrier} {transport.origin}-{transport.destination}"
+                duration = transport.duration_minutes
+                popularity = transport.reliability_score
+            elif hasattr(transport, 'type') and hasattr(transport, 'provider'):
+                # It's ground transport
+                item_type = "ground_transport"
+                name = f"{transport.type.title()} ({transport.provider})"
+                duration = transport.duration_minutes
+                popularity = 0.8  # Default popularity for ground transport
+            else:
+                # Unknown transport type, skip
+                continue
+            
+            item = ItineraryItem(
+                item_id=f"transport_{i}",
+                item_type=item_type,
+                name=name,
+                day=0,
+                start_time=0,
+                duration=duration,
+                cost=transport.price,
+                latitude=0, longitude=0,  # Not used for transport
+                preference_score=0.8,
+                popularity_score=popularity,
+                mandatory=False  # Will be enforced by constraint, not individual flag
+            )
+            items.append(item)
+
+        # Add accommodations (one per day)
+        for i, acc in enumerate(accommodations[:5]):
+            for day in range(num_days):
+                item = ItineraryItem(
+                    item_id=f"acc_{i}_day{day}",
+                    item_type="accommodation",
+                    name=acc.name,
+                    day=day,
+                    start_time=0,
+                    duration=1440,  # Full day
+                    cost=acc.price_per_night,
+                    latitude=acc.latitude,
+                    longitude=acc.longitude,
+                    preference_score=acc.rating / 5.0,
+                    popularity_score=min(1.0, acc.review_count / 500),
+                    mandatory=False
+                )
+                items.append(item)
+
+        # Add restaurants (multiple per day possible)
+        for i, rest in enumerate(restaurants[:10]):
+            for day in range(1, num_days):  # Skip day 0 (arrival)
+                for meal_time in [720, 1080]:  # Lunch at 12:00, Dinner at 18:00
+                    item = ItineraryItem(
+                        item_id=f"rest_{i}_day{day}_t{meal_time}",
+                        item_type="restaurant",
+                        name=rest.name,
+                        day=day,
+                        start_time=meal_time,
+                        duration=rest.average_meal_time_minutes,
+                        cost=rest.average_meal_cost,
+                        latitude=rest.latitude,
+                        longitude=rest.longitude,
+                        preference_score=rest.rating / 5.0,
+                        popularity_score=min(1.0, rest.review_count / 300),
+                        mandatory=False
+                    )
+                    items.append(item)
+
+        # Add activities
+        for i, act in enumerate(activities):
+            for day in range(1, num_days):
+                # Morning, afternoon slots
+                for start_time in [540, 840]:  # 09:00, 14:00
+                    item = ItineraryItem(
+                        item_id=f"act_{i}_day{day}_t{start_time}",
+                        item_type="activity",
+                        name=act.name,
+                        day=day,
+                        start_time=start_time,
+                        duration=act.duration_minutes,
+                        cost=act.price,
+                        latitude=act.latitude,
+                        longitude=act.longitude,
+                        preference_score=act.rating / 5.0,
+                        popularity_score=act.popularity_score,
+                        mandatory=False
+                    )
+                    items.append(item)
+
+        return items
+
+    def _add_budget_constraint(self, items, item_vars):
+        """Budget constraint: total cost <= budget"""
+        prefs = self.user_profile.travel_preferences
+        if not prefs or getattr(prefs, 'budget_total', None) is None or prefs.budget_total <= 0:
+            print("  ✓ Skipping budget constraint (no budget specified)")
+            return
+
+        total_budget = prefs.budget_total
+
+        # Calculate total cost
+        cost_terms = []
+        for item in items:
+            cost_int = int(item.cost * 100)  # Convert to integer cents
+            cost_terms.append(cost_int * item_vars[item.item_id])
+
+        if cost_terms:
+            self.model.Add(sum(cost_terms) <= int(total_budget * 100))
+            print(f"  ✓ Added budget constraint: <= INR {total_budget:,.2f}")
+
+    def _add_time_constraints(self, items, item_vars, num_days):
+        """Time and sequencing constraints"""
+        constraint_count = 0
+        for day in range(num_days):
+            day_items = [item for item in items if item.day == day]
+
+            # No overlapping activities on same day
+            for i, item1 in enumerate(day_items):
+                for item2 in day_items[i+1:]:
+                    if item1.item_type in ['activity', 'restaurant'] and \
+                       item2.item_type in ['activity', 'restaurant']:
+                        # Check if they overlap
+                        overlap = not (item1.start_time + item1.duration <= item2.start_time or
+                                     item2.start_time + item2.duration <= item1.start_time)
+                        if overlap:
+                            # At most one can be selected
+                            self.model.Add(item_vars[item1.item_id] + item_vars[item2.item_id] <= 1)
+                            constraint_count += 1
+
+        if constraint_count > 0:
+            print(f"  ✓ Added {constraint_count} time constraints (no overlaps)")
+
+    def _add_activity_limit_constraint(self, items, item_vars, num_days):
+        """Limit activities per day"""
+        prefs = self.user_profile.travel_preferences
+        if not prefs:
+            max_activities = 4
+        else:
+            max_activities = prefs.max_activities_per_day
+
+        constraint_count = 0
+        for day in range(num_days):
+            day_activities = [item for item in items 
+                            if item.day == day and item.item_type == 'activity']
+
+            if day_activities:
+                self.model.Add(
+                    sum(item_vars[item.item_id] for item in day_activities) <= max_activities
+                )
+                constraint_count += 1
+
+        if constraint_count > 0:
+            print(f"  ✓ Added activity limit: max {max_activities} per day")
+        
+        min_activities = 1  # At least 1 activity per day
+        min_constraint_count = 0
+        
+        for day in range(num_days):
+            day_activities = [item for item in items 
+                            if item.day == day and item.item_type == 'activity']
+
+            if day_activities:
+                # MINIMUM constraint (NEW - this is the critical fix!)
+                self.model.Add(
+                    sum(item_vars[item.item_id] for item in day_activities) >= min_activities
+                )
+                min_constraint_count += 1
+
+        if min_constraint_count > 0:
+            print(f"  ✓ Added MINIMUM activity requirement: >= {min_activities} per day")
+
+    def _add_mandatory_constraints(self, items, item_vars):
+        """Mandatory items must be selected"""
+        mandatory_count = 0
+        for item in items:
+            if item.mandatory:
+                self.model.Add(item_vars[item.item_id] == 1)
+                mandatory_count += 1
+
+        if mandatory_count > 0:
+            print(f"  ✓ Added {mandatory_count} mandatory item constraints")
+
+    def _add_logical_constraints(self, items, item_vars, num_days):
+        """Logical constraints (e.g., exactly one accommodation per day)"""
+        accommodation_constraints = 0
+        for day in range(num_days):
+            day_accommodations = [item for item in items 
+                                if item.day == day and item.item_type == 'accommodation']
+
+            if day_accommodations:
+                # Exactly one accommodation per day
+                self.model.Add(
+                    sum(item_vars[item.item_id] for item in day_accommodations) == 1
+                )
+                accommodation_constraints += 1
+
+        if accommodation_constraints > 0:
+            print(f"  ✓ Added {accommodation_constraints} accommodation constraints (1 per day)")
+        
+        # Exactly one transport (flight OR ground_transport) for entire trip
+        transport_items = [item for item in items 
+                          if item.item_type in ['flight', 'ground_transport']]
+        
+        if transport_items:
+            # Exactly 1 transport for the entire trip
+            self.model.Add(
+                sum(item_vars[item.item_id] for item in transport_items) == 1
+            )
+            print(f"  ✓ Added transport constraint: exactly 1 transport for trip")
+            print(f"     ({len(transport_items)} transport options available)")
+        
+        # NEW: Each unique activity/restaurant can only be selected once across entire trip
+        # Group items by their base name (without day/time suffix)
+        activity_groups = {}
+        restaurant_groups = {}
+        
+        for item in items:
+            if item.item_type == 'activity':
+                # Extract base ID (e.g., "act_0" from "act_0_day1_t540")
+                base_id = '_'.join(item.item_id.split('_')[:2])  # "act_0"
+                if base_id not in activity_groups:
+                    activity_groups[base_id] = []
+                activity_groups[base_id].append(item)
+            
+            elif item.item_type == 'restaurant':
+                # Extract base ID (e.g., "rest_0" from "rest_0_day1_t720")
+                base_id = '_'.join(item.item_id.split('_')[:2])  # "rest_0"
+                if base_id not in restaurant_groups:
+                    restaurant_groups[base_id] = []
+                restaurant_groups[base_id].append(item)
+        
+        # Add constraint: each activity can be selected at most once
+        activity_uniqueness_count = 0
+        for base_id, item_list in activity_groups.items():
+            if len(item_list) > 1:  # Only add constraint if there are multiple instances
+                # At most 1 instance of this activity across all days/times
+                self.model.Add(
+                    sum(item_vars[item.item_id] for item in item_list) <= 1
+                )
+                activity_uniqueness_count += 1
+        
+        if activity_uniqueness_count > 0:
+            print(f"  ✓ Added {activity_uniqueness_count} activity uniqueness constraints")
+            print(f"     (each activity max 1x per trip)")
+        
+        # Add constraint: each restaurant can be selected at most once per day
+        # (allow same restaurant on different days, but not same day)
+        restaurant_uniqueness_count = 0
+        for day in range(num_days):
+            day_restaurant_groups = {}
+            
+            for item in items:
+                if item.item_type == 'restaurant' and item.day == day:
+                    base_id = '_'.join(item.item_id.split('_')[:2])
+                    if base_id not in day_restaurant_groups:
+                        day_restaurant_groups[base_id] = []
+                    day_restaurant_groups[base_id].append(item)
+            
+            # At most 1 instance per restaurant per day
+            for base_id, item_list in day_restaurant_groups.items():
+                if len(item_list) > 1:
+                    self.model.Add(
+                        sum(item_vars[item.item_id] for item in item_list) <= 1
+                    )
+                    restaurant_uniqueness_count += 1
+        
+        if restaurant_uniqueness_count > 0:
+            print(f"  ✓ Added {restaurant_uniqueness_count} restaurant uniqueness constraints")
+            print(f"     (each restaurant max 1x per day)")
+
+    def _set_objective(self, items, item_vars):
+        """Set multi-objective optimization function"""
+        # Normalize values
+        max_cost = max(item.cost for item in items) if items else 1
+        max_duration = max(item.duration for item in items) if items else 1
+
+        objective_terms = []
+
+        for item in items:
+            # Normalized scores
+            cost_score = int((1 - item.cost / max_cost) * 1000) if max_cost > 0 else 0
+            time_score = int((1 - item.duration / max_duration) * 1000) if max_duration > 0 else 0
+            pref_score = int(item.preference_score * 1000)
+            pop_score = int(item.popularity_score * 1000)
+
+            # Weighted sum
+            score = int(
+                self.weight_cost * cost_score +
+                self.weight_time * time_score +
+                self.weight_preference * pref_score +
+                self.weight_popularity * pop_score
+            )
+
+            objective_terms.append(score * item_vars[item.item_id])
+
+        # Maximize total score
+        if objective_terms:
+            self.model.Maximize(sum(objective_terms))
+            print(f"  ✓ Objective function set (maximize weighted score)")
+
+    def _extract_solution(self, items, item_vars, items_by_id, num_days) -> Dict[str, Any]:
+        """Extract and format the solution"""
+        selected_items = [item for item in items 
+                         if self.solver.Value(item_vars[item.item_id]) == 1]
+
+        # Organize by day
+        itinerary_by_day = {day: [] for day in range(num_days)}
+
+        for item in selected_items:
+            itinerary_by_day[item.day].append(item)
+
+        # Sort each day by start time
+        for day in itinerary_by_day:
+            itinerary_by_day[day].sort(key=lambda x: x.start_time)
+
+        # Calculate totals
+        total_cost = sum(item.cost for item in selected_items)
+
+        # Get status name safely
+        status_name = self._get_status_name(self.last_solve_status)
+
+        # Build result
+        result = {
+            'itinerary': itinerary_by_day,
+            'total_cost': round(total_cost, 2),
+            'currency': 'INR',
+            'num_days': num_days,
+            'num_transport': sum(1 for item in selected_items if item.item_type in ['flight', 'ground_transport']),
+            'num_activities': sum(1 for item in selected_items if item.item_type == 'activity'),
+            'num_restaurants': sum(1 for item in selected_items if item.item_type == 'restaurant'),
+            'num_accommodations': sum(1 for item in selected_items if item.item_type == 'accommodation'),
+            'budget_remaining': self.user_profile.travel_preferences.budget_total - total_cost if self.user_profile.travel_preferences else 0,
+            'solver_stats': {
+                'status': status_name,
+                'objective_value': self.solver.ObjectiveValue(),
+                'solve_time': self.solver.WallTime(),
+                'total_items': len(selected_items)
+            }
+        }
+
+        return result
+
+
+if __name__ == "__main__":
+    print("Itinerary Optimizer Module")
+    print("This module requires data from agents to run.")
+    print("Use main.py to run the full system.")

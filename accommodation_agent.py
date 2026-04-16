@@ -108,24 +108,29 @@ class AccommodationAgent:
 
     def _search_via_overpass(self, lat: float, lon: float, accommodation_types: List[str],
                             radius_km: float, max_results: int) -> List[AccommodationOption]:
-        """Search via Overpass with multiple server fallback and rate limiting"""
+        """Retry ALL Overpass servers in round-robin until real data is returned.
         
-        # Try each Overpass server in sequence
-        for server_index, overpass_url in enumerate(self.overpass_urls, 1):
-            try:
-                print(f"  🔍 Querying Overpass server {server_index}/{len(self.overpass_urls)}...")
-                
-                # Rate limiting: wait if needed
-                self._apply_rate_limit()
-                
-                # CORRECTED: Proper Overpass query with bounding box (south, west, north, east)
-                lat1 = lat - (radius_km / 111.0)  # south
-                lon1 = lon - (radius_km / 111.0)  # west
-                lat2 = lat + (radius_km / 111.0)  # north
-                lon2 = lon + (radius_km / 111.0)  # east
+        Mock data is NEVER used. If every server in one pass fails we wait briefly
+        and try again from the top, forever, until at least one succeeds.
+        """
+        attempt = 0
+        base_wait = 2.0   # seconds between full-cycle retries
+        max_wait  = 30.0  # cap on wait time
 
-                # Optimized query - reduced timeout, limited types
-                query = f"""[out:json][timeout:15];
+        while True:
+            for server_index, overpass_url in enumerate(self.overpass_urls, 1):
+                try:
+                    print(f"  🔍 Querying Overpass server {server_index}/{len(self.overpass_urls)} "
+                          f"(attempt {attempt + 1})...")
+
+                    self._apply_rate_limit()
+
+                    lat1 = lat - (radius_km / 111.0)
+                    lon1 = lon - (radius_km / 111.0)
+                    lat2 = lat + (radius_km / 111.0)
+                    lon2 = lon + (radius_km / 111.0)
+
+                    query = f"""[out:json][timeout:15];
 (
   node["tourism"="hotel"]({lat1},{lon1},{lat2},{lon2});
   way["tourism"="hotel"]({lat1},{lon1},{lat2},{lon2});
@@ -136,60 +141,42 @@ class AccommodationAgent:
 out center {max_results};
 """
 
-                # Make request with timeout
-                response = requests.post(
-                    overpass_url, 
-                    data=query,
-                    headers=self.headers, 
-                    timeout=20  # 20 second timeout
-                )
-
-                # Check response status
-                if response.status_code == 200:
-                    # Success! Parse and return results
-                    data = response.json()
-                    accommodations = self._parse_overpass_results(
-                        data, lat, lon, max_results
+                    response = requests.post(
+                        overpass_url,
+                        data=query,
+                        headers=self.headers,
+                        timeout=20
                     )
-                    
-                    if accommodations:
-                        print(f"  ✅ Server {server_index} succeeded!")
-                        print(f"  ✓ Extracted {len(accommodations)} accommodations")
-                        return accommodations
-                    else:
-                        print(f"  ⚠️  Server {server_index} returned 0 results, trying next...")
-                        continue
-                
-                elif response.status_code == 429:
-                    # Rate limited
-                    print(f"  ⚠️  Server {server_index} rate limited (429), trying next...")
-                    continue
-                
-                elif response.status_code == 504:
-                    # Gateway timeout
-                    print(f"  ⚠️  Server {server_index} timeout (504), trying next...")
-                    continue
-                
-                else:
-                    print(f"  ⚠️  Server {server_index} error {response.status_code}, trying next...")
-                    continue
 
-            except requests.exceptions.Timeout:
-                print(f"  ⚠️  Server {server_index} timeout, trying next...")
-                continue
-            
-            except requests.exceptions.ConnectionError:
-                print(f"  ⚠️  Server {server_index} connection error, trying next...")
-                continue
-            
-            except Exception as e:
-                print(f"  ⚠️  Server {server_index} error: {str(e)[:50]}, trying next...")
-                continue
-        
-        # All servers failed
-        print(f"  ❌ All {len(self.overpass_urls)} Overpass servers failed")
-        print(f"  🔄 Generating mock accommodations as fallback...")
-        return self._generate_mock_accommodations(lat, lon, max_results)
+                    if response.status_code == 200:
+                        data = response.json()
+                        accommodations = self._parse_overpass_results(data, lat, lon, max_results)
+                        if accommodations:
+                            print(f"  ✅ Server {server_index} succeeded with "
+                                  f"{len(accommodations)} real accommodations")
+                            return accommodations
+                        else:
+                            print(f"  ⚠️  Server {server_index} returned 0 results, trying next...")
+                    elif response.status_code == 429:
+                        print(f"  ⚠️  Server {server_index} rate-limited (429), trying next...")
+                    elif response.status_code == 504:
+                        print(f"  ⚠️  Server {server_index} gateway timeout (504), trying next...")
+                    else:
+                        print(f"  ⚠️  Server {server_index} HTTP {response.status_code}, trying next...")
+
+                except requests.exceptions.Timeout:
+                    print(f"  ⚠️  Server {server_index} timed out, trying next...")
+                except requests.exceptions.ConnectionError:
+                    print(f"  ⚠️  Server {server_index} connection error, trying next...")
+                except Exception as e:
+                    print(f"  ⚠️  Server {server_index} error: {str(e)[:60]}, trying next...")
+
+            # All servers in this pass failed — wait and retry
+            attempt += 1
+            wait = min(base_wait * attempt, max_wait)
+            print(f"  🔄 All {len(self.overpass_urls)} Overpass servers failed "
+                  f"(pass {attempt}). Retrying in {wait:.1f}s...")
+            time.sleep(wait)
     
     def _apply_rate_limit(self):
         """Apply rate limiting between requests"""

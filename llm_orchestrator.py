@@ -696,12 +696,37 @@ Examples:
         
         # Use new selection system to rank and let user pick top 3
         user_id = trip_details.get('user_id', 'anonymous')
+        # Build metrics dict to pass into the selection UI
+        _strategy_metrics = {
+            "One-by-One": {
+                "time_s": time_1,
+                "memory_mb": mem_1,
+                "cost": cost_1,
+                "valid": strategy_1_valid,
+            },
+            "Parallel": {
+                "time_s": time_2,
+                "memory_mb": mem_2,
+                "cost": cost_2,
+                "valid": strategy_2_valid,
+            },
+            "Sequential": {
+                "time_s": time_3,
+                "memory_mb": mem_3,
+                "cost": cost_3,
+                "valid": strategy_3_valid,
+            },
+        }
+
         selection_result = self.handle_itinerary_selection(
             result_onebyones,
             result_parallel,
             result_sequential,
             trip_details,
-            user_id
+            user_id,
+            search_space=unified_search_space,
+            user_profile=user_profile,
+            strategy_metrics=_strategy_metrics,
         )
         
         if selection_result is None:
@@ -3522,7 +3547,10 @@ Examples:
         result_parallel: Optional[dict],
         result_sequential: Optional[dict],
         trip_details: dict,
-        user_id: str = "anonymous"
+        user_id: str = "anonymous",
+        search_space: Optional[dict] = None,
+        user_profile=None,
+        strategy_metrics: Optional[dict] = None,
     ) -> Optional[Tuple[str, dict]]:
         """
         Handle ranking and user selection of top 3 itineraries.
@@ -3538,6 +3566,8 @@ Examples:
             result_sequential: Itinerary(ies) from sequential strategy
             trip_details: Trip details dict
             user_id: User ID for storage
+            search_space: Unified search space for generating diverse alternatives
+            user_profile: User profile for re-running optimizer
         
         Returns:
             (selected_strategy, selected_itinerary) or None if cancelled
@@ -3585,8 +3615,168 @@ Examples:
             print("❌ No valid itineraries to select from")
             return None
         
+        # ── Deduplicate: drop itineraries with identical fingerprints ──────────
+        # Fingerprint = (rounded total_cost, frozenset of all item names) so that
+        # strategies which produce the exact same plan don't pollute the top-3 display.
+        def _itinerary_fingerprint(itinerary: dict) -> tuple:
+            cost_key = round(itinerary.get('total_cost', 0))
+            # Collect ALL item names across every day for a robust content hash
+            all_item_names = []
+            for day_items in itinerary.get('itinerary', {}).values():
+                for item in day_items:
+                    name = getattr(item, 'name', None) or ''
+                    if name:
+                        all_item_names.append(name.strip().lower())
+            # Use a frozenset so order doesn't matter; combined with cost gives a
+            # reliable fingerprint even when attribute names (category/item_type) vary.
+            return (cost_key, frozenset(all_item_names))
+
+        seen_fingerprints: set = set()
+        unique_flat_itineraries = []
+        for label, itinerary in flat_itineraries:
+            fp = _itinerary_fingerprint(itinerary)
+            if fp not in seen_fingerprints:
+                seen_fingerprints.add(fp)
+                unique_flat_itineraries.append((label, itinerary))
+            else:
+                print(f"   ⚠️  Skipping duplicate itinerary: {label} "
+                      f"(same cost & hotel as a previously seen plan)")
+
+        flat_itineraries = unique_flat_itineraries
+        if not flat_itineraries:
+            print("❌ No unique itineraries after deduplication")
+            return None
+
         budget = trip_details.get('budget_inr', 150000)
-        
+
+        # ── Generate diverse alternatives if fewer than 3 unique plans ────────
+        # Re-run the optimizer with previously-chosen hotels, activities, and
+        # restaurants excluded/rotated so we always present up to 3 genuinely
+        # different options.
+        if search_space and user_profile and len(flat_itineraries) < 3:
+            print(f"\n   🔄 Only {len(flat_itineraries)} unique plan(s) found — "
+                  f"generating diverse alternatives...")
+
+            def _item_names_by_category(itinerary: dict, *categories) -> set:
+                """Return all item names in an itinerary matching any of the given categories."""
+                names = set()
+                for day_items in itinerary.get('itinerary', {}).values():
+                    for item in day_items:
+                        cat = (getattr(item, 'category', '')
+                               or getattr(item, 'item_type', '')).lower()
+                        if any(c in cat for c in categories):
+                            name = getattr(item, 'name', '') or ''
+                            if name:
+                                names.add(name)
+                return names
+
+            def _extract_hotel_name(itinerary: dict) -> str:
+                names = _item_names_by_category(itinerary, 'accommodation', 'hotel')
+                return next(iter(names), '')
+
+            # Seed exclusion sets from all plans found so far
+            used_hotels      = set()
+            used_activities  = set()
+            used_restaurants = set()
+            for _, it in flat_itineraries:
+                used_hotels      |= _item_names_by_category(it, 'accommodation', 'hotel')
+                used_activities  |= _item_names_by_category(it, 'activity', 'attraction')
+                used_restaurants |= _item_names_by_category(it, 'restaurant', 'food')
+
+            all_hotels      = search_space.get('hotel', [])
+            all_activities  = search_space.get('activity', [])
+            all_restaurants = search_space.get('restaurant', [])
+            all_flights     = search_space.get('flight', [])
+            all_ground      = search_space.get('ground_transport', [])
+            num_days        = trip_details.get('num_days', 3)
+
+            attempt = 0
+            while len(flat_itineraries) < 3 and attempt < 6:
+                attempt += 1
+
+                # ── Filter out already-used options ────────────────────────────
+                remaining_hotels = [
+                    h for h in all_hotels
+                    if (getattr(h, 'name', '') or '') not in used_hotels
+                ]
+                remaining_activities = [
+                    a for a in all_activities
+                    if (getattr(a, 'name', '') or '') not in used_activities
+                ]
+                remaining_restaurants = [
+                    r for r in all_restaurants
+                    if (getattr(r, 'name', '') or '') not in used_restaurants
+                ]
+
+                if not remaining_hotels:
+                    print("   ⚠️  No more distinct hotels available for diversity")
+                    break
+
+                # Use an offset so each attempt exposes a different window of
+                # restaurants/activities even when the exclusion set is small.
+                offset = (attempt - 1) * 5
+
+                alt_hotels      = remaining_hotels[:10]
+                # Rotate restaurants/activities: take a window starting at offset,
+                # wrapping around if needed, then fill from beginning if short.
+                def _rotated_slice(lst, size, off):
+                    if not lst:
+                        return []
+                    n = len(lst)
+                    indices = [(off + i) % n for i in range(min(size, n))]
+                    return [lst[i] for i in indices]
+
+                alt_restaurants = _rotated_slice(remaining_restaurants, 20, offset)
+                alt_activities  = _rotated_slice(remaining_activities, 25, offset)
+                alt_flights     = all_flights[:15]
+                alt_ground      = all_ground[:10]
+
+                transport_all = sorted(
+                    alt_flights + alt_ground,
+                    key=lambda t: getattr(t, 'price', float('inf'))
+                )
+
+                print(f"   🔄 Diversity attempt {attempt}: "
+                      f"{len(alt_hotels)} hotels / "
+                      f"{len(alt_restaurants)} restaurants / "
+                      f"{len(alt_activities)} activities  "
+                      f"(offset={offset}, excl hotels={len(used_hotels)}, "
+                      f"excl acts={len(used_activities)}, "
+                      f"excl rests={len(used_restaurants)})")
+
+                try:
+                    alt_result = (
+                        self._optimize_with_langgraph(
+                            transport_all, alt_hotels,
+                            alt_restaurants, alt_activities,
+                            num_days, budget, user_profile, trip_details,
+                        ) if self.USE_LANGGRAPH and LANGGRAPH_AVAILABLE else
+                        self._optimize_with_ortools(
+                            transport_all, alt_hotels,
+                            alt_restaurants, alt_activities,
+                            num_days, user_profile,
+                        )
+                    )
+                except Exception as e:
+                    print(f"   ⚠️  Diversity attempt {attempt} failed: {e}")
+                    break
+
+                if alt_result and 'error' not in alt_result:
+                    fp = _itinerary_fingerprint(alt_result)
+                    if fp not in seen_fingerprints:
+                        seen_fingerprints.add(fp)
+                        label = f"Alternative #{len(flat_itineraries)}"
+                        flat_itineraries.append((label, alt_result))
+                        print(f"   ✅ Added diverse alternative: {label} "
+                              f"(cost: INR {alt_result.get('total_cost', 0):,.0f})")
+
+                # Always update exclusion sets from this result (even if duplicate)
+                # so next attempt is forced to explore further
+                if alt_result and 'error' not in alt_result:
+                    used_hotels      |= _item_names_by_category(alt_result, 'accommodation', 'hotel')
+                    used_activities  |= _item_names_by_category(alt_result, 'activity', 'attraction')
+                    used_restaurants |= _item_names_by_category(alt_result, 'restaurant', 'food')
+
         # Rank itineraries using flat list
         ranker = ItineraryRanker(budget)
         ranked = ranker.rank_itineraries(flat_itineraries)
@@ -3597,7 +3787,7 @@ Examples:
         
         # Display and get selection
         selector = ItinerarySelector()
-        selected = selector.display_and_select(ranked, budget, trip_details)
+        selected = selector.display_and_select(ranked, budget, trip_details, strategy_metrics=strategy_metrics)
         
         if selected:
             strategy_name, full_itinerary = selected

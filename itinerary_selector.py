@@ -142,7 +142,8 @@ class ItinerarySelector:
         self, 
         ranked_itineraries: List[Tuple[str, ItinerarySummary]],
         budget: float,
-        trip_details: Dict[str, Any]
+        trip_details: Dict[str, Any],
+        strategy_metrics: Optional[Dict[str, Any]] = None,
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         Display all itineraries grouped by strategy, then top 3 ranked overall.
@@ -155,6 +156,32 @@ class ItinerarySelector:
             self._print_error("❌ No valid itineraries found")
             return None
         
+        # ── Performance Summary Table ──────────────────────────────────────────
+        if strategy_metrics:
+            print("\n" + "="*100)
+            print("📊 GENERATION PERFORMANCE SUMMARY (All 3 Methods)")
+            print("="*100)
+            print(f"{'Method':<25} | {'Time Taken':>12} | {'Memory Used':>13} | {'Total Cost (INR)':>18} | {'Valid':>7}")
+            print("-" * 100)
+            method_display = [
+                ("One-by-One",  "One-by-One"),
+                ("Parallel",    "Parallel"),
+                ("Sequential",  "Sequential"),
+            ]
+            for key, label in method_display:
+                m = strategy_metrics.get(key, {})
+                time_s  = m.get("time_s",   0.0)
+                mem_mb  = m.get("memory_mb", 0.0)
+                cost    = m.get("cost",     float("inf"))
+                valid   = m.get("valid",    False)
+                status  = "✅ Yes" if valid else "❌ No"
+                cost_str = f"₹{cost:,.0f}" if cost < float("inf") else "N/A"
+                print(
+                    f"{label:<25} | {time_s:>10.2f}s | {mem_mb:>+11.1f} MB | "
+                    f"{cost_str:>18} | {status:>7}"
+                )
+            print("="*100 + "\n")
+
         # Group by strategy for display
         by_strategy = {}
         for idx, (strategy_name, summary) in enumerate(ranked_itineraries):
@@ -191,12 +218,33 @@ class ItinerarySelector:
                 
                 print(f"  {strat_name:<25} | Cost: {cost_str:>12} | /Day: {cost_per_day:>10} | {status} {remaining_str}")
         
-        # Show top 3 ranked
+        # Show top 3 ranked — deduplicate first so we never show the same plan twice
         print("\n" + "="*80)
         print("🏆 TOP 3 BEST OPTIONS (Ranked Across All Strategies)")
         print("="*80 + "\n")
-        
-        top_3 = ranked_itineraries[:3]
+
+        def _plan_fingerprint(summary: ItinerarySummary) -> tuple:
+            """Content-based fingerprint: (rounded_cost, frozenset_of_all_item_names)."""
+            cost_key = round(summary.total_cost)
+            all_names = []
+            if summary.full_data:
+                for day_items in summary.full_data.get('itinerary', {}).values():
+                    for item in day_items:
+                        name = getattr(item, 'name', None) or ''
+                        if name:
+                            all_names.append(name.strip().lower())
+            return (cost_key, frozenset(all_names))
+
+        seen_fps: set = set()
+        unique_ranked: list = []
+        for entry in ranked_itineraries:
+            fp = _plan_fingerprint(entry[1])
+            if fp not in seen_fps:
+                seen_fps.add(fp)
+                unique_ranked.append(entry)
+            # silently skip duplicates — they were already shown grouped by strategy above
+
+        top_3 = unique_ranked[:3]
         
         print(f"{'Rank':<6} | {'Strategy':<30} | {'Total Cost':<15} | {'Cost/Day':<12} | {'Status':<12}")
         print("-" * 90)
@@ -296,8 +344,8 @@ class ItinerarySelector:
                 item_type = getattr(item, 'item_type', None) or getattr(item, 'category', 'unknown')
                 item_type = item_type.lower() if item_type else 'unknown'
                 
-                # Get icon
-                icon = self._get_item_icon(item_type, name)
+                # Get icon (pass item so cuisine_type can disambiguate 'Hotel XYZ' restaurants)
+                icon = self._get_item_icon(item_type, name, item=item)
                 
                 # Get time
                 time_str = self._get_item_time(item)
@@ -357,7 +405,14 @@ class ItinerarySelector:
                         mins = item.duration_minutes % 60
                         print(f"   ⏱️ Duration: {hrs}h {mins}m")
                 
-                elif item_type in ['restaurant']:
+                # Show cuisine for any item that has one (catches 'Hotel XYZ' restaurants
+                # where item_type may have been set to 'accommodation' upstream)
+                elif (
+                    'restaurant' in item_type or 'dining' in item_type
+                    or (hasattr(item, 'cuisine_type') and item.cuisine_type)
+                    or (hasattr(item, 'properties') and isinstance(item.properties, dict)
+                        and item.properties.get('cuisine'))
+                ):
                     if hasattr(item, 'cuisine_type') and item.cuisine_type:
                         print(f"   🍜 {item.cuisine_type} cuisine")
                     elif hasattr(item, 'properties') and item.properties.get('cuisine'):
@@ -372,14 +427,17 @@ class ItinerarySelector:
         
         print("="*80 + "\n")
     
-    def _get_item_icon(self, item_type: str, name: str) -> str:
-        """Get appropriate emoji icon for item type"""
+    def _get_item_icon(self, item_type: str, name: str, item=None) -> str:
+        """Get appropriate emoji icon for item type.
+        
+        IMPORTANT: item_type always wins over name-based heuristics.
+        South Indian eateries are often named 'Hotel XYZ' but are restaurants.
+        """
         item_type = item_type.lower()
         name_lower = name.lower()
         
-        # Check for specific types
+        # --- 1. Transport / Flight (highest priority) ---
         if 'transport' in item_type or 'flight' in item_type or '→' in name_lower:
-            # Ground transport detection FIRST
             if 'train' in name_lower or 'railway' in name_lower or 'rajdhani' in name_lower or 'express' in name_lower:
                 return "🚆"
             elif 'bus' in name_lower or 'vrl' in name_lower or 'redbus' in name_lower or 'public transport' in name_lower:
@@ -388,34 +446,50 @@ class ItinerarySelector:
                 return "🚕"
             elif 'car' in name_lower:
                 return "🚗"
-            elif 'flight' in item_type or 'flight' in name_lower or 'air' in name_lower:
-                return "✈️"
             else:
                 return "✈️"
-        elif 'accommodation' in item_type or 'hotel' in name_lower:
-            return "🏨"
-        elif 'restaurant' in item_type or 'dining' in item_type:
+        
+        # --- 2. Restaurant (check item_type BEFORE name for 'hotel') ---
+        # This prevents South-Indian 'Hotel XYZ' restaurants from being
+        # shown with a 🏨 icon just because 'hotel' appears in the name.
+        if 'restaurant' in item_type or 'dining' in item_type:
             return "🍽️"
-        elif 'activity' in item_type or 'attraction' in item_type:
+        
+        # Also treat any item that carries a cuisine_type/cuisine as a restaurant
+        if item is not None:
+            has_cuisine = (
+                (hasattr(item, 'cuisine_type') and item.cuisine_type)
+                or (hasattr(item, 'properties') and isinstance(item.properties, dict)
+                    and item.properties.get('cuisine'))
+            )
+            if has_cuisine:
+                return "🍽️"
+        
+        # --- 3. Accommodation ---
+        if 'accommodation' in item_type:
+            return "🏨"
+        
+        # --- 4. Activity / Attraction ---
+        if 'activity' in item_type or 'attraction' in item_type:
+            return "🎭"
+        
+        # --- 5. Name-based fallback (only when item_type gives no signal) ---
+        if 'restaurant' in name_lower or 'café' in name_lower or 'bistro' in name_lower or 'canteen' in name_lower or 'bhavan' in name_lower or 'darshini' in name_lower:
+            return "🍽️"
+        elif 'hotel' in name_lower or 'hôtel' in name_lower or 'inn' in name_lower or 'hostel' in name_lower or 'lodge' in name_lower:
+            return "🏨"
+        elif 'flight' in name_lower or 'air' in name_lower:
+            return "✈️"
+        elif 'train' in name_lower or 'railway' in name_lower or 'express' in name_lower:
+            return "🚆"
+        elif 'bus' in name_lower or 'public transport' in name_lower:
+            return "🚌"
+        elif 'taxi' in name_lower or 'cab' in name_lower:
+            return "🚕"
+        elif 'museum' in name_lower or 'palace' in name_lower or 'cathedral' in name_lower or 'tower' in name_lower or 'park' in name_lower or 'beach' in name_lower or 'garden' in name_lower:
             return "🎭"
         else:
-            # Fallback: check name for clues
-            if 'hotel' in name_lower or 'hôtel' in name_lower or 'inn' in name_lower:
-                return "🏨"
-            elif 'restaurant' in name_lower or 'café' in name_lower or 'bistro' in name_lower:
-                return "🍽️"
-            elif 'flight' in name_lower or 'air' in name_lower:
-                return "✈️"
-            elif 'train' in name_lower or 'railway' in name_lower or 'express' in name_lower:
-                return "🚆"
-            elif 'bus' in name_lower or 'public transport' in name_lower:
-                return "🚌"
-            elif 'taxi' in name_lower or 'cab' in name_lower:
-                return "🚕"
-            elif 'museum' in name_lower or 'palace' in name_lower or 'cathedral' in name_lower or 'tower' in name_lower or 'park' in name_lower or 'beach' in name_lower or 'garden' in name_lower:
-                return "🎭"
-            else:
-                return "📍"
+            return "📍"
     
     def _get_item_time(self, item) -> str:
         """Extract proper time string from item"""

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { sendChatMessage } from "@/lib/api"
 import { ItineraryCards } from "./itinerary-cards"
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer"
 import type { Itinerary } from "@/types"
 
 interface Message {
@@ -210,12 +211,12 @@ export function ChatInterface() {
                           </div>
                         ) : message.itineraries && message.itineraries.length > 0 ? (
                           <div className="mt-2 text-left">
-                            <p className="mb-4 text-muted-foreground">I have generated 3 customized itinerary options for you. Please select one to confirm your trip.</p>
+                            <p className="mb-4 text-muted-foreground">I have generated {message.itineraries.length} customized itinerary options for you. Please select one to confirm your trip.</p>
                             <ItineraryCards itineraries={message.itineraries} />
                           </div>
                         ) : (
-                          <div className="inline-block rounded-2xl px-4 py-3 bg-muted text-foreground">
-                            <p className="whitespace-pre-wrap text-left">{message.content}</p>
+                          <div className="inline-block rounded-2xl px-4 py-3 bg-muted text-foreground text-left max-w-none w-full relative">
+                            <MarkdownRenderer>{message.content}</MarkdownRenderer>
                           </div>
                         )}
                       </div>

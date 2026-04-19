@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import ReactMarkdown from "react-markdown"
+import { MarkdownRenderer, CompactMarkdown } from "@/components/ui/markdown-renderer"
 import { MapPin, Calendar, Wallet, ChevronRight, X, Check, Star } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
@@ -65,16 +65,16 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
                     <span className="text-xs font-medium text-primary uppercase tracking-wider">
                       Option {index + 1}
                     </span>
-                    <h3 className="text-lg font-semibold text-foreground mt-1 line-clamp-1">
-                      {itinerary.title}
-                    </h3>
+                    <div className="text-lg font-semibold text-foreground mt-1 line-clamp-1">
+                      <CompactMarkdown>{itinerary.title}</CompactMarkdown>
+                    </div>
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground line-clamp-2">
-                  {itinerary.summary}
-                </p>
+                <div className="text-sm text-muted-foreground line-clamp-2">
+                  <CompactMarkdown>{itinerary.summary}</CompactMarkdown>
+                </div>
 
                 <div className="flex flex-wrap gap-3 text-sm">
                   <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -82,8 +82,8 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
                     <span>{itinerary.days} days</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <Wallet className="w-4 h-4" />
-                    <span>{itinerary.budget}</span>
+                    <Wallet className="w-4 h-4 flex-shrink-0" />
+                    <span className="line-clamp-1"><CompactMarkdown>{itinerary.budget}</CompactMarkdown></span>
                   </div>
                 </div>
 
@@ -95,7 +95,7 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
                     {itinerary.highlights.slice(0, 3).map((highlight, i) => (
                       <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
                         <Star className="w-3 h-3 text-primary mt-1 flex-shrink-0" />
-                        <span className="line-clamp-1">{highlight}</span>
+                        <span className="line-clamp-1"><CompactMarkdown>{highlight}</CompactMarkdown></span>
                       </li>
                     ))}
                   </ul>
@@ -181,8 +181,8 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
                   <h3 className="text-lg font-semibold text-foreground mb-3">
                     Full Itinerary
                   </h3>
-                  <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground leading-relaxed">
-                    <ReactMarkdown>{selectedItinerary.details}</ReactMarkdown>
+                  <div className="text-left w-full relative">
+                    <MarkdownRenderer>{selectedItinerary.details}</MarkdownRenderer>
                   </div>
                 </div>
               </div>

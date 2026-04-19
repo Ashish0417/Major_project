@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import ReactMarkdown from "react-markdown"
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer"
 import { MapPin, Calendar, Wallet, Eye, History, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
@@ -176,8 +176,8 @@ export default function PastTripsPage() {
                       <h3 className="text-lg font-semibold text-foreground mb-3">
                         {selectedTrip.itinerary.title}
                       </h3>
-                      <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground leading-relaxed">
-                        <ReactMarkdown>{selectedTrip.itinerary.details}</ReactMarkdown>
+                      <div className="text-left w-full relative">
+                        <MarkdownRenderer>{selectedTrip.itinerary.details}</MarkdownRenderer>
                       </div>
                     </>
                   ) : (

@@ -3601,7 +3601,7 @@ Examples:
             print("❌ No valid itineraries to select from")
             return None
         
-        budget = trip_details.get('budget_inr', 150000)
+        budget = trip_details.get('budget_inr') or 150000
         
         # Rank itineraries using flat list
         ranker = ItineraryRanker(budget)

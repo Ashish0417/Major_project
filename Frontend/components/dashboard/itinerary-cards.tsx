@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
+import ReactMarkdown from "react-markdown"
 import { MapPin, Calendar, Wallet, ChevronRight, X, Check, Star } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
@@ -180,8 +181,8 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
                   <h3 className="text-lg font-semibold text-foreground mb-3">
                     Full Itinerary
                   </h3>
-                  <div className="whitespace-pre-wrap text-muted-foreground leading-relaxed">
-                    {selectedItinerary.details}
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground leading-relaxed">
+                    <ReactMarkdown>{selectedItinerary.details}</ReactMarkdown>
                   </div>
                 </div>
               </div>

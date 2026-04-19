@@ -81,22 +81,22 @@ class UserProfile:
         self.name = data.get('name', '')
 
         # Contact info
-        if 'contact' in data:
+        if data.get('contact'):
             self.contact = ContactInfo(**data['contact'])
 
         # Destinations and dates
         self.destinations = data.get('destinations', [])
-        if 'dates' in data:
+        if data.get('dates'):
             self.dates = TripDates(**data['dates'])
 
         self.default_currency = data.get('default_currency', 'USD')
 
         # Travel preferences
-        if 'travel_preferences' in data:
+        if data.get('travel_preferences'):
             self.travel_preferences = TravelPreferences(**data['travel_preferences'])
 
         # Historical trips
-        if 'historical_trips' in data:
+        if data.get('historical_trips'):
             self.historical_trips = [
                 HistoricalTrip(**trip) for trip in data['historical_trips']
             ]

@@ -115,6 +115,21 @@ export async function submitFeedback(data: FeedbackData): Promise<{ status: stri
   }, true)
 }
 
+export async function selectItinerary(index: number): Promise<{ status: string, message: string, strategy: string }> {
+  return apiCall("/api/itinerary/select", {
+    method: "POST",
+    body: JSON.stringify({ index }),
+  }, true)
+}
+
+export async function getUserProfile(): Promise<any> {
+  return apiCall("/api/user/profile", { method: "GET" }, true)
+}
+
+export async function getUserTrips(): Promise<any[]> {
+  return apiCall("/api/user/trips", { method: "GET" }, true)
+}
+
 export function getUserIdFromToken(): string | null {
   const token = getToken()
   if (!token) return null

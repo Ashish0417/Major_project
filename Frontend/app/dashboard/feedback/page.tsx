@@ -1,38 +1,33 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
 import { MessageCircle, MapPin, Calendar, Send, Loader2, CheckCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { submitFeedback, getUserIdFromToken } from "@/lib/api"
-
-// Mock data for past trips
-const pastTrips = [
-  {
-    id: "trip-1",
-    destination: "Goa Beach Getaway",
-    dates: "June 15-20, 2024",
-  },
-  {
-    id: "trip-2",
-    destination: "Kerala Backwaters",
-    dates: "January 10-15, 2024",
-  },
-  {
-    id: "trip-3",
-    destination: "Rajasthan Heritage Tour",
-    dates: "March 5-12, 2024",
-  },
-]
+import { submitFeedback, getUserIdFromToken, getUserTrips } from "@/lib/api"
+import type { Trip } from "@/types"
 
 export default function FeedbackPage() {
   const [selectedTrip, setSelectedTrip] = useState<string | null>(null)
   const [feedback, setFeedback] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submittedTrips, setSubmittedTrips] = useState<string[]>([])
+  
+  const [pastTrips, setPastTrips] = useState<Trip[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    getUserTrips().then(data => {
+      setPastTrips(data)
+    }).catch(err => {
+      console.error(err)
+    }).finally(() => {
+      setIsLoading(false)
+    })
+  }, [])
 
   const handleSubmit = async () => {
     if (!selectedTrip || !feedback.trim()) {
@@ -73,6 +68,22 @@ export default function FeedbackPage() {
         </p>
       </div>
 
+      {isLoading ? (
+        <div className="flex items-center justify-center p-12">
+          <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+        </div>
+      ) : pastTrips.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <h3 className="text-lg font-semibold text-foreground mb-2">
+              No Trips Yet
+            </h3>
+            <p className="text-muted-foreground">
+              You haven't planned any trips yet! Start chatting with our AI to build an itinerary.
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
       <div className="grid gap-6">
         {/* Trip Selection */}
         <Card>
@@ -206,6 +217,7 @@ export default function FeedbackPage() {
           </Card>
         )}
       </div>
+      )}
     </div>
   )
 }

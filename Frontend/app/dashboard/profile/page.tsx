@@ -5,23 +5,8 @@ import { motion } from "framer-motion"
 import { User, Mail, Phone, Compass, Wallet, Target, Clock, Heart, Users } from "lucide-react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { getUserIdFromToken } from "@/lib/api"
-
-// Mock user data - in real app, fetch from API
-const mockUserData = {
-  name: "Lasya Reddy",
-  email: "lasya@example.com",
-  phone: "+91-9876543210",
-  travel_theme: "Nature & Wildlife",
-  budget_tier: "Moderate",
-  // Preference weights (0-100)
-  preferences: {
-    cost: 30,
-    time: 20,
-    preference: 35,
-    popularity: 15,
-  },
-}
+import { getUserProfile, getUserIdFromToken } from "@/lib/api"
+import { Loader2 } from "lucide-react"
 
 const preferenceLabels = {
   cost: { label: "Budget Priority", icon: Wallet, description: "How much budget influences recommendations" },
@@ -32,10 +17,36 @@ const preferenceLabels = {
 
 export default function ProfilePage() {
   const [userId, setUserId] = useState<string | null>(null)
+  const [userData, setUserData] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     setUserId(getUserIdFromToken())
+    
+    getUserProfile().then(data => {
+      setUserData(data)
+    }).catch(err => {
+      console.error("Failed to load profile:", err)
+    }).finally(() => {
+      setIsLoading(false)
+    })
   }, [])
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (!userData) {
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        <h2>Failed to load user profile. Please try logging out and logging in again.</h2>
+      </div>
+    )
+  }
 
   return (
     <div className="p-6 lg:p-8 max-w-4xl mx-auto">
@@ -62,12 +73,12 @@ export default function ProfilePage() {
               <div className="flex items-center gap-4 p-4 rounded-xl bg-muted/50">
                 <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
                   <span className="text-2xl font-bold text-primary">
-                    {mockUserData.name.charAt(0)}
+                    {userData.name.charAt(0)}
                   </span>
                 </div>
                 <div>
                   <h3 className="text-lg font-semibold text-foreground">
-                    {mockUserData.name}
+                    {userData.name}
                   </h3>
                   {userId && (
                     <p className="text-sm text-muted-foreground">
@@ -82,14 +93,14 @@ export default function ProfilePage() {
                   <Mail className="w-5 h-5 text-muted-foreground" />
                   <div>
                     <p className="text-xs text-muted-foreground">Email</p>
-                    <p className="text-sm text-foreground">{mockUserData.email}</p>
+                    <p className="text-sm text-foreground">{userData.email}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 p-3 rounded-lg border border-border">
                   <Phone className="w-5 h-5 text-muted-foreground" />
                   <div>
                     <p className="text-xs text-muted-foreground">Phone</p>
-                    <p className="text-sm text-foreground">{mockUserData.phone}</p>
+                    <p className="text-sm text-foreground">{userData.phone}</p>
                   </div>
                 </div>
               </div>
@@ -117,7 +128,7 @@ export default function ProfilePage() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Travel Style</p>
-                    <p className="font-medium text-foreground">{mockUserData.travel_theme}</p>
+                    <p className="font-medium text-foreground capitalize">{userData.travel_theme}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 p-4 rounded-xl bg-accent/10 border border-accent/20">
@@ -126,7 +137,7 @@ export default function ProfilePage() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground">Budget Tier</p>
-                    <p className="font-medium text-foreground">{mockUserData.budget_tier}</p>
+                    <p className="font-medium text-foreground capitalize">{userData.budget_tier}</p>
                   </div>
                 </div>
               </div>
@@ -154,8 +165,10 @@ export default function ProfilePage() {
               </p>
             </CardHeader>
             <CardContent className="space-y-6">
-              {Object.entries(mockUserData.preferences).map(([key, value], index) => {
+              {Object.entries(userData.preferences).map(([key, value], index) => {
+                const numValue = typeof value === 'number' ? value : 0
                 const pref = preferenceLabels[key as keyof typeof preferenceLabels]
+                if (!pref) return null
                 return (
                   <motion.div
                     key={key}
@@ -169,9 +182,9 @@ export default function ProfilePage() {
                         <pref.icon className="w-4 h-4 text-muted-foreground" />
                         <span className="font-medium text-foreground">{pref.label}</span>
                       </div>
-                      <span className="text-sm font-semibold text-primary">{value}%</span>
+                      <span className="text-sm font-semibold text-primary">{numValue}%</span>
                     </div>
-                    <Progress value={value} className="h-2" />
+                    <Progress value={numValue} className="h-2" />
                     <p className="text-xs text-muted-foreground">{pref.description}</p>
                   </motion.div>
                 )

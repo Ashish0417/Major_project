@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { toast } from "sonner"
 import type { Itinerary } from "@/types"
+import { selectItinerary } from "@/lib/api"
 
 interface ItineraryCardsProps {
   itineraries: Itinerary[]
@@ -16,11 +17,23 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
   const [selectedItinerary, setSelectedItinerary] = useState<Itinerary | null>(null)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
 
-  const handleSelect = (itinerary: Itinerary, index: number) => {
-    setSelectedIndex(index)
-    toast.success(`Selected: ${itinerary.title}`, {
-      description: "This itinerary has been saved to your trips.",
-    })
+  const [isSelecting, setIsSelecting] = useState(false)
+
+  const handleSelect = async (itinerary: Itinerary, index: number) => {
+    setIsSelecting(true)
+    try {
+      await selectItinerary(index)
+      setSelectedIndex(index)
+      toast.success(`Selected: ${itinerary.title}`, {
+        description: "This itinerary has been saved to your trips in the database.",
+      })
+    } catch (error: any) {
+      toast.error("Selection failed", {
+        description: error.message || "Could not save your itinerary.",
+      })
+    } finally {
+      setIsSelecting(false)
+    }
   }
 
   return (
@@ -99,11 +112,11 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
                   </Button>
                   <Button
                     size="sm"
-                    className="flex-1"
+                    className={`flex-1 transition-colors ${selectedIndex === index ? "bg-green-600 hover:bg-green-700 text-white" : ""}`}
                     onClick={() => handleSelect(itinerary, index)}
-                    disabled={selectedIndex === index}
+                    disabled={(selectedIndex !== null) || isSelecting}
                   >
-                    {selectedIndex === index ? "Selected" : "Select"}
+                    {selectedIndex === index ? "Confirmed ✅" : "Confirm"}
                   </Button>
                 </div>
               </CardContent>
@@ -173,23 +186,32 @@ export function ItineraryCards({ itineraries }: ItineraryCardsProps) {
                 </div>
               </div>
 
-              <div className="flex gap-3 p-6 border-t border-border">
+              <div className="flex gap-3 p-6 border-t border-border bg-muted/20">
                 <Button
                   variant="outline"
                   className="flex-1"
                   onClick={() => setSelectedItinerary(null)}
                 >
-                  Back
+                  Back to Options
                 </Button>
                 <Button
-                  className="flex-1"
-                  onClick={() => {
+                  className={`flex-1 transition-colors ${
+                    selectedIndex === itineraries.findIndex(i => i.id === selectedItinerary.id)
+                      ? "bg-green-600 text-white hover:bg-green-700" : ""
+                  }`}
+                  disabled={isSelecting || selectedIndex !== null}
+                  onClick={async () => {
                     const index = itineraries.findIndex(i => i.id === selectedItinerary.id)
-                    handleSelect(selectedItinerary, index)
-                    setSelectedItinerary(null)
+                    await handleSelect(selectedItinerary, index)
                   }}
                 >
-                  Select This Itinerary
+                  {isSelecting 
+                    ? "Saving..." 
+                    : selectedIndex === itineraries.findIndex(i => i.id === selectedItinerary.id) 
+                      ? "Confirmed ✅"
+                      : selectedIndex !== null 
+                        ? "Another option confirmed" 
+                        : "Confirm This Itinerary"}
                 </Button>
               </div>
             </motion.div>

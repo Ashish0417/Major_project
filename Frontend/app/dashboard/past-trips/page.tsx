@@ -1,53 +1,44 @@
 "use client"
 
-import { useState } from "react"
-import { motion } from "framer-motion"
-import { MapPin, Calendar, Wallet, Eye, History } from "lucide-react"
+import { useState, useEffect } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { MapPin, Calendar, Wallet, Eye, History, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import type { Trip } from "@/types"
 
-// Mock data - replace with actual API calls
-const mockTrips: Trip[] = [
-  {
-    id: "trip-1",
-    destination: "Goa",
-    dates: "June 15-20, 2024",
-    budget: "INR 25,000",
-    status: "completed",
-  },
-  {
-    id: "trip-2",
-    destination: "Manali",
-    dates: "December 1-7, 2024",
-    budget: "INR 35,000",
-    status: "planned",
-  },
-  {
-    id: "trip-3",
-    destination: "Kerala Backwaters",
-    dates: "January 10-15, 2024",
-    budget: "INR 40,000",
-    status: "completed",
-  },
-  {
-    id: "trip-4",
-    destination: "Rajasthan Circuit",
-    dates: "March 5-12, 2025",
-    budget: "INR 55,000",
-    status: "in-progress",
-  },
-]
+import { Loader2 } from "lucide-react"
+import { getUserTrips } from "@/lib/api"
 
-const statusColors = {
+const statusColors: Record<string, string> = {
   completed: "bg-green-500/10 text-green-600 border-green-500/20",
   planned: "bg-blue-500/10 text-blue-600 border-blue-500/20",
   "in-progress": "bg-amber-500/10 text-amber-600 border-amber-500/20",
 }
 
 export default function PastTripsPage() {
-  const [trips] = useState<Trip[]>(mockTrips)
+  const [trips, setTrips] = useState<Trip[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
+
+  useEffect(() => {
+    getUserTrips().then(data => {
+      setTrips(data)
+    }).catch(err => {
+      console.error(err)
+    }).finally(() => {
+      setIsLoading(false)
+    })
+  }, [])
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
 
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto">
@@ -92,7 +83,7 @@ export default function PastTripsPage() {
                         </h3>
                         <Badge
                           variant="outline"
-                          className={statusColors[trip.status]}
+                          className={statusColors[trip.status] || statusColors["planned"]}
                         >
                           {trip.status.charAt(0).toUpperCase() + trip.status.slice(1)}
                         </Badge>
@@ -112,7 +103,7 @@ export default function PastTripsPage() {
                     </div>
                   </div>
 
-                  <Button variant="outline" className="w-full">
+                  <Button variant="outline" className="w-full" onClick={() => setSelectedTrip(trip)}>
                     <Eye className="w-4 h-4 mr-2" />
                     View Details
                   </Button>
@@ -122,6 +113,92 @@ export default function PastTripsPage() {
           ))}
         </div>
       )}
+
+      {/* Details Modal */}
+      <AnimatePresence>
+        {selectedTrip && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            onClick={() => setSelectedTrip(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-card rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-6 border-b border-border">
+                <div>
+                  <span className="text-xs font-medium text-primary uppercase tracking-wider">
+                    Trip Details
+                  </span>
+                  <h2 className="text-xl font-bold text-foreground mt-1">
+                    {selectedTrip.destination}
+                  </h2>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setSelectedTrip(null)}
+                >
+                  <X className="w-5 h-5" />
+                </Button>
+              </div>
+
+              <div className="p-6 overflow-y-auto max-h-[calc(85vh-180px)]">
+                <div className="flex flex-wrap gap-4 mb-6">
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
+                    <Calendar className="w-4 h-4 text-primary" />
+                    <span className="text-sm">{selectedTrip.dates}</span>
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
+                    <Wallet className="w-4 h-4 text-primary" />
+                    <span className="text-sm">{selectedTrip.budget}</span>
+                  </div>
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-muted">
+                    <Badge
+                      variant="outline"
+                      className={statusColors[selectedTrip.status] || statusColors["planned"]}
+                    >
+                      {selectedTrip.status.charAt(0).toUpperCase() + selectedTrip.status.slice(1)}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="prose prose-sm max-w-none">
+                  {selectedTrip.itinerary ? (
+                    <>
+                      <h3 className="text-lg font-semibold text-foreground mb-3">
+                        {selectedTrip.itinerary.title}
+                      </h3>
+                      <div className="whitespace-pre-wrap text-muted-foreground leading-relaxed">
+                        {selectedTrip.itinerary.details}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-muted-foreground text-center py-8">
+                      No detailed itinerary available for this trip.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-end p-6 border-t border-border bg-muted/20">
+                <Button
+                  variant="outline"
+                  onClick={() => setSelectedTrip(null)}
+                >
+                  Close
+                </Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

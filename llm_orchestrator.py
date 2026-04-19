@@ -262,7 +262,6 @@ class TravelItineraryOrchestrator:
         print(f"   💱 Currency converter ready ({len(self.currency_converter.rates)} currencies)")
         print(f"   🚕 Ground transport agent ready")
         
-        # Airport code mapping
         self.airport_codes = {
             'bangalore': 'BLR', 'mumbai': 'BOM', 'delhi': 'DEL',
             'tokyo': 'NRT', 'paris': 'CDG', 'london': 'LHR',
@@ -273,6 +272,7 @@ class TravelItineraryOrchestrator:
         }
         
         self.conversation_history = []
+        self.temp_itineraries = {} # Temporarily hold 3 generated itineraries for the user
         print("✅ Orchestrator ready!")
     
     def parse_date(self, date_str: str) -> Optional[str]:
@@ -413,7 +413,7 @@ Examples:
         return summary
         
     
-    def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None):
+    def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None, interactive: bool = True):
         """Generate complete optimized day-by-day itinerary"""
         
         # Initialize performance monitoring
@@ -712,14 +712,18 @@ Examples:
             result_parallel,
             result_sequential,
             trip_details,
-            user_id
+            user_id,
+            interactive=interactive
         )
         
-        if selection_result is None:
-            print("\n❌ No itinerary selected. Exiting.")
+        if not selection_result:
+            print("\n❌ No itinerary generated or selected. Exiting.")
             perf_monitor.report()
             return None
         
+        if not interactive:
+            return selection_result # List of the top 3 ranked itineraries
+            
         strategy_name, optimized = selection_result
 
         print("=" * 80)
@@ -3533,8 +3537,9 @@ Examples:
         result_parallel: Optional[dict],
         result_sequential: Optional[dict],
         trip_details: dict,
-        user_id: str = "anonymous"
-    ) -> Optional[Tuple[str, dict]]:
+        user_id: str = "anonymous",
+        interactive: bool = True
+    ) -> Union[Optional[Tuple[str, dict]], List[Tuple[str, dict]]]:
         """
         Handle ranking and user selection of top 3 itineraries.
         
@@ -3607,20 +3612,24 @@ Examples:
             return None
         
         # Display and get selection
-        selector = ItinerarySelector()
-        selected = selector.display_and_select(ranked, budget, trip_details)
-        
-        if selected:
-            strategy_name, full_itinerary = selected
-            # Display the selected itinerary
-            selector.display_selected(strategy_name, full_itinerary)
+        if interactive:
+            selector = ItinerarySelector()
+            selected = selector.display_and_select(ranked, budget, trip_details)
             
-            # Save to database
-            self.save_selected_itinerary(strategy_name, full_itinerary, trip_details, user_id)
+            if selected:
+                strategy_name, full_itinerary = selected
+                # Display the selected itinerary
+                selector.display_selected(strategy_name, full_itinerary)
+                
+                # Save to database
+                self.save_selected_itinerary(strategy_name, full_itinerary, trip_details, user_id)
+                
+                return (strategy_name, full_itinerary)
             
-            return (strategy_name, full_itinerary)
-        
-        return None
+            return None
+        else:
+            # If not interactive (API call), just return the top 3 itineraries grouped together
+            return [(name, summary.full_data) for name, summary in ranked[:3]]
     
     def save_selected_itinerary(
         self,
@@ -3690,7 +3699,7 @@ Examples:
                     sys.stdout.register(writer)
                     sys.stderr.register(writer)
                     try:
-                        return self.generate_itinerary(trip_details)
+                        return self.generate_itinerary(trip_details, interactive=False)
                     finally:
                         sys.stdout.unregister()
                         sys.stderr.unregister()
@@ -3712,7 +3721,7 @@ Examples:
                         # Stream the terminal logs smoothly, ~3 chars at a time
                         for i in range(0, len(safe_val), 3):
                             yield safe_val[i:i+3]
-                            await asyncio.sleep(0.005)
+                            # await asyncio.sleep(0.005)
                     except asyncio.TimeoutError:
                         if thread_task.done():
                             break
@@ -3733,6 +3742,13 @@ Examples:
                         'query': query,
                         'result_summary': 'Itinerary generated'
                     })
+                    
+                    # Store the top 3 in memory so the selection API can retrieve it
+                    if result:
+                        self.temp_itineraries[user_id] = {
+                            "trip_details": trip_details,
+                            "options": result
+                        }
 
                 yield "\n✅ Optimization complete! Formatting your schedule...\n\n"
                 import json
@@ -3743,11 +3759,13 @@ Examples:
                 try:
                     json_str = json.dumps(result, default=str)[:15000]
                     prompt = (
-                        "You are a master Travel Agent. I have computed an optimal multi-day travel itinerary. "
-                        "Format the following JSON itinerary into a beautiful, detailed day-by-day markdown schedule. Use emojis. "
-                        "Be friendly. Do not just summarize, explicitly list the detailed schedule with times, places, prices, and total budget information.\n\n"
+                        "You are a master Travel Agent. I have computed up to 3 optimal multi-day travel itineraries. "
+                        "Format the following JSON itineraries beautifully. YOU MUST clearly distinguish them into 3 options using the precise headings:\n"
+                        "'Itinerary 1:', 'Itinerary 2:', and 'Itinerary 3:'. Provide each one separately.\n"
+                        "For each option, give it a Title on the next line. Include a summary of Budget, duration in days, and quick highlights. "
+                        "Ensure the options appear as three separate blocks. Be friendly. Explicitly list the detailed schedule with times, places, prices, and total budget information.\n\n"
                         f"USER QUERY: {query}\n\n"
-                        f"JSON ITINERARY:\n{json_str}"
+                        f"JSON ITINERARIES:\n{json_str}"
                     )
                     
                     from langchain_core.messages import HumanMessage
@@ -3757,7 +3775,7 @@ Examples:
                         for i, word in enumerate(words):
                             yield word + (' ' if i < len(words) - 1 else '')
                             # Adding tiny delay to make buffering less likely to chunk paragraphs
-                            await asyncio.sleep(0.005)
+                            # await asyncio.sleep(0.005)
                 except Exception as e:
                     import traceback
                     traceback.print_exc()

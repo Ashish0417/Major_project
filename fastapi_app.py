@@ -524,6 +524,9 @@ class LoginRequest(BaseModel):
 class ChatRequest(BaseModel):
     query: str
 
+class SelectItineraryRequest(BaseModel):
+    index: int
+
 class ModelFeedbackRequest(BaseModel):
     user_id: str
     trip_id: str
@@ -632,6 +635,112 @@ async def chat(req: ChatRequest, user_id: str = Depends(get_current_user_id)):
         )
     except Exception as e:
         raise HTTPException(500, str(e))
+
+# ================= ITINERARY SELECTION =================
+@app.post("/api/itinerary/select")
+def select_itinerary(req: SelectItineraryRequest, user_id: str = Depends(get_current_user_id)):
+    temp = orchestrator.temp_itineraries.get(user_id)
+    if not temp or 'options' not in temp:
+        raise HTTPException(status_code=400, detail="No recently generated itineraries found.")
+        
+    options = temp['options']
+    if req.index < 0 or req.index >= len(options):
+        raise HTTPException(status_code=400, detail="Invalid itinerary index.")
+        
+    strategy_name, full_itinerary = options[req.index]
+    trip_details = temp['trip_details']
+    
+    success = orchestrator.save_selected_itinerary(strategy_name, full_itinerary, trip_details, user_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save itinerary.")
+        
+    return {
+        "status": "success", 
+        "message": "Itinerary selected and saved successfully.", 
+        "strategy": strategy_name
+    }
+
+# ================= USER DATA & PROFILE =================
+@app.get("/api/user/profile")
+def get_user_profile_endpoint(user_id: str = Depends(get_current_user_id)):
+    profile = history_manager.get_user_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    pref = profile.get('travel_preferences', {})
+    contact = profile.get('contact', {})
+    
+    return {
+        "name": profile.get('name', 'User'),
+        "email": contact.get('email', 'N/A'),
+        "phone": contact.get('phone', 'N/A'),
+        "travel_theme": pref.get('activity_interests', ['General'])[0] if pref.get('activity_interests') else 'General',
+        "budget_tier": pref.get('comfort_level', 'moderate'),
+        "preferences": {
+            "cost": int(pref.get('weight_cost', 0.3) * 100),
+            "time": int(pref.get('weight_time', 0.2) * 100),
+            "preference": int(pref.get('weight_preference', 0.3) * 100),
+            "popularity": int(pref.get('weight_popularity', 0.2) * 100),
+        }
+    }
+
+@app.get("/api/user/trips")
+def get_user_trips_endpoint(user_id: str = Depends(get_current_user_id)):
+    itineraries = history_manager.get_itineraries(user_id)
+    
+    trips = []
+    for it in itineraries:
+        data = it.get('data', it)
+        destination = data.get('destination', data.get('destination_city', 'Unknown Destination'))
+        
+        # build date string gently
+        start_dt = data.get('departure_date', '')
+        end_dt = data.get('return_date', '')
+        dates = f"{start_dt} to {end_dt}".strip(" to ") if start_dt or end_dt else "Flexible Dates"
+        
+        budget = f"INR {data.get('total_cost_inr', data.get('total_budget_inr', 0)):,.0f}"
+        
+        # safely extract ID
+        trip_id = data.get('trip_id', it.get('_id', str(id(it))))
+        
+        details = ""
+        daily = data.get('daily_schedules', [])
+        for day in daily:
+            details += f"### Day {day.get('day', '?')}\n"
+            for idx, item in enumerate(day.get('items', [])):
+                time_val = item.get('time', '')
+                time_str = f"**{time_val}**: " if time_val else ""
+                details += f"- {time_str}{item.get('name', '')} ({item.get('type', '')})\n"
+                desc = item.get('description', '')
+                if desc:
+                    details += f"  {desc}\n"
+                cost = item.get('cost_inr', 0)
+                if cost > 0:
+                    details += f"  *Cost: INR {cost:,.0f}*\n"
+            details += "\n"
+
+        itinerary_obj = {
+            "id": str(trip_id),
+            "title": f"Trip to {destination}",
+            "destination": destination,
+            "summary": data.get('query', 'Custom generated itinerary'),
+            "budget": budget,
+            "days": data.get('num_days', 0),
+            "highlights": data.get('interests', []),
+            "details": details.strip() or "No detailed schedule available.",
+            "created_at": str(it.get('created_at', ''))
+        }
+        
+        trips.append({
+            "id": str(trip_id),
+            "destination": destination,
+            "dates": dates,
+            "budget": budget,
+            "status": "planned",
+            "itinerary": itinerary_obj
+        })
+        
+    return trips
 
 # ================= FEEDBACK PIPELINE =================
 @app.post("/api/update_feedback")

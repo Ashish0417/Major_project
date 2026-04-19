@@ -14,6 +14,7 @@ interface Message {
   role: "user" | "assistant"
   content: string
   itineraries?: Itinerary[]
+  isStreaming?: boolean
 }
 
 function parseItineraries(text: string): Itinerary[] {
@@ -82,7 +83,7 @@ export function ChatInterface() {
     // Add empty assistant message
     setMessages((prev) => [
       ...prev,
-      { id: assistantMessageId, role: "assistant", content: "" },
+      { id: assistantMessageId, role: "assistant", content: "", isStreaming: true },
     ])
 
     try {
@@ -97,18 +98,16 @@ export function ChatInterface() {
 
       // After streaming completes, parse for itineraries
       const itineraries = parseItineraries(fullText)
-      if (itineraries.length > 0) {
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId ? { ...msg, itineraries } : msg
-          )
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId ? { ...msg, itineraries, isStreaming: false } : msg
         )
-      }
+      )
     } catch (error) {
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMessageId
-            ? { ...msg, content: "Sorry, something went wrong. Please try again." }
+            ? { ...msg, content: "Sorry, something went wrong. Please try again.", isStreaming: false }
             : msg
         )
       )
@@ -187,21 +186,38 @@ export function ChatInterface() {
                   </div>
                   <div
                     className={`flex-1 max-w-[85%] ${
-                      message.role === "user" ? "text-right" : ""
+                      message.role === "user" ? "text-right" : "max-w-full w-full"
                     }`}
                   >
-                    <div
-                      className={`inline-block rounded-2xl px-4 py-3 ${
-                        message.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-foreground"
-                      }`}
-                    >
-                      <p className="whitespace-pre-wrap text-left">{message.content}</p>
-                    </div>
-                    {message.itineraries && message.itineraries.length > 0 && (
-                      <div className="mt-4">
-                        <ItineraryCards itineraries={message.itineraries} />
+                    {message.role === "user" ? (
+                      <div className="inline-block rounded-2xl px-4 py-3 bg-primary text-primary-foreground">
+                        <p className="whitespace-pre-wrap text-left">{message.content}</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-4 w-full">
+                        {message.isStreaming ? (
+                          <div className="space-y-4 w-full max-w-md rounded-2xl bg-muted/40 p-5 mt-2 animate-pulse border border-border/50 shadow-sm">
+                            <div className="flex items-center gap-3">
+                              <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                              <span className="text-sm font-semibold text-primary">Crafting perfect itineraries...</span>
+                            </div>
+                            <div className="space-y-3 mt-4">
+                              <div className="h-3 bg-primary/10 rounded w-3/4"></div>
+                              <div className="h-3 bg-primary/10 rounded w-full"></div>
+                              <div className="h-3 bg-primary/10 rounded w-5/6"></div>
+                              <div className="h-3 bg-primary/10 rounded w-1/2"></div>
+                            </div>
+                          </div>
+                        ) : message.itineraries && message.itineraries.length > 0 ? (
+                          <div className="mt-2 text-left">
+                            <p className="mb-4 text-muted-foreground">I have generated 3 customized itinerary options for you. Please select one to confirm your trip.</p>
+                            <ItineraryCards itineraries={message.itineraries} />
+                          </div>
+                        ) : (
+                          <div className="inline-block rounded-2xl px-4 py-3 bg-muted text-foreground">
+                            <p className="whitespace-pre-wrap text-left">{message.content}</p>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

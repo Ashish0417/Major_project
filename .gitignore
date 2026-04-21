@@ -9,3 +9,4 @@ travel_agent_env/
 .vscode/
 
 catboost_info/
+node_modules/

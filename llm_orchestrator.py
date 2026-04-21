@@ -262,6 +262,7 @@ class TravelItineraryOrchestrator:
         print(f"   💱 Currency converter ready ({len(self.currency_converter.rates)} currencies)")
         print(f"   🚕 Ground transport agent ready")
         
+        # Airport code mapping
         self.airport_codes = {
             'bangalore': 'BLR', 'mumbai': 'BOM', 'delhi': 'DEL',
             'tokyo': 'NRT', 'paris': 'CDG', 'london': 'LHR',
@@ -272,7 +273,6 @@ class TravelItineraryOrchestrator:
         }
         
         self.conversation_history = []
-        self.temp_itineraries = {} # Temporarily hold 3 generated itineraries for the user
         print("✅ Orchestrator ready!")
     
     def parse_date(self, date_str: str) -> Optional[str]:
@@ -413,7 +413,7 @@ Examples:
         return summary
         
     
-    def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None, interactive: bool = True):
+    def generate_itinerary(self, trip_details: Optional[dict] = None, user_profile: Optional[UserProfile] = None):
         """Generate complete optimized day-by-day itinerary"""
         
         # Initialize performance monitoring
@@ -445,18 +445,7 @@ Examples:
         
         # Create or use user profile
         if not user_profile:
-            user_id = trip_details.get('user_id') if trip_details else None
-            if user_id and user_id != 'anonymous':
-                profile_dict = self.history_manager.get_user_profile(user_id)
-                if profile_dict:
-                    from user_profile import UserProfile
-                    user_profile = UserProfile().from_dict(profile_dict)
-                    
-            if not user_profile:
-                user_profile = create_sample_profile()
-                if user_id:
-                    user_profile.user_id = user_id
-                    
+            user_profile = create_sample_profile()
             # Update profile with trip details
             if budget:
                 user_profile.travel_preferences.budget_total = budget
@@ -712,18 +701,14 @@ Examples:
             result_parallel,
             result_sequential,
             trip_details,
-            user_id,
-            interactive=interactive
+            user_id
         )
         
-        if not selection_result:
-            print("\n❌ No itinerary generated or selected. Exiting.")
+        if selection_result is None:
+            print("\n❌ No itinerary selected. Exiting.")
             perf_monitor.report()
             return None
         
-        if not interactive:
-            return selection_result # List of the top 3 ranked itineraries
-            
         strategy_name, optimized = selection_result
 
         print("=" * 80)
@@ -1730,6 +1715,25 @@ Examples:
 
     def _convert_langgraph_result(self, lg_result: dict, flights, accommodations,
                               restaurants, activities, num_days) -> dict:
+        top_plans = lg_result.get("top_plans", [])
+        if not top_plans and lg_result.get("best_plan"):
+            top_plans = [lg_result.get("best_plan")]
+        
+        all_converted = []
+        import copy
+        for p in top_plans:
+            score = p.get("score", lg_result.get("best_score", 0))
+            converted = self._convert_langgraph_single_plan(p, score, lg_result.get("evaluated_combinations", 0), lg_result.get("backtrack_attempts", 0), flights, accommodations, restaurants, activities, num_days)
+            all_converted.append(converted)
+            
+        if not all_converted:
+            return {}
+            
+        main_result = all_converted[0]
+        main_result["all_top_itineraries"] = all_converted
+        return main_result
+
+    def _convert_langgraph_single_plan(self, best_plan: dict, score: float, eval_comb: int, backtrack: int, flights, accommodations, restaurants, activities, num_days) -> dict:
         """
         Convert LangGraph result back to itinerary display format.
 
@@ -1746,7 +1750,7 @@ Examples:
         ACTIVITIES_PER_DAY = 2   # number of activity slots per day
         # ────────────────────────────────────────────────────────────────────────
 
-        best_plan = lg_result.get('best_plan', {})
+        # best_plan passed as arg
 
         # ------------------------------------------------------------------
         # 1.  Initialise empty days
@@ -1865,26 +1869,25 @@ Examples:
         #         act_pool.append(selected)
         def _build_pools(unique_restaurants, unique_activities, num_days,
                  MEALS_PER_DAY=2, ACTIVITIES_PER_DAY=2):
-            """
-            Build per-slot pools for restaurants and activities.
-        
-            Each slot receives a DEEP COPY of the source item so that
-            _assign_item_times() can write a unique scheduled_time into every copy
-            without aliasing effects.
-        
-            A unique id is stamped on each copy:  original_id + "__slot{N}"
-            """
-        
             total_meal_slots     = num_days * MEALS_PER_DAY
-            # last day gets only 1 activity slot
             total_activity_slots = (num_days - 1) * ACTIVITIES_PER_DAY + 1
         
+            # Prioritize the items actually chosen by LangGraph!
+            lg_rests = [r.id for r in best_plan.get('restaurants', []) if r]
+            lg_acts = [a.id for a in best_plan.get('activities', []) if a]
+            
+            # Reorder them so LangGraph choices come first
+            if unique_restaurants and lg_rests:
+                unique_restaurants = [r for r in unique_restaurants if r.id in lg_rests] + [r for r in unique_restaurants if r.id not in lg_rests]
+            if unique_activities and lg_acts:
+                unique_activities = [a for a in unique_activities if a.id in lg_acts] + [a for a in unique_activities if a.id not in lg_acts]
+
             rest_pool = []
             for slot in range(total_meal_slots):
                 if unique_restaurants:
                     src   = unique_restaurants[slot % len(unique_restaurants)]
                     clone = copy.deepcopy(src)
-                    clone.id = f"{src.id}__slot{slot}"          # unique id per slot
+                    clone.id = f"{src.id}__slot{slot}"
                     rest_pool.append(clone)
         
             act_pool = []
@@ -1968,9 +1971,9 @@ Examples:
             'itinerary':     day_itinerary,
             'optimizer_metadata': {
                 'optimizer':               'langgraph',
-                'score':                   lg_result.get('best_score', 0),
-                'combinations_evaluated':  lg_result.get('evaluated_combinations', 0),
-                'backtrack_attempts':      lg_result.get('backtrack_attempts', 0),
+                'score':                   score,
+                'combinations_evaluated':  eval_comb,
+                'backtrack_attempts':      backtrack,
                 'best_plan':               best_plan,
             }
         }
@@ -3537,9 +3540,8 @@ Examples:
         result_parallel: Optional[dict],
         result_sequential: Optional[dict],
         trip_details: dict,
-        user_id: str = "anonymous",
-        interactive: bool = True
-    ) -> Union[Optional[Tuple[str, dict]], List[Tuple[str, dict]]]:
+        user_id: str = "anonymous"
+    ) -> Optional[Tuple[str, dict]]:
         """
         Handle ranking and user selection of top 3 itineraries.
         
@@ -3579,29 +3581,29 @@ Examples:
         flat_itineraries = []
         strategy_counter = {'One-by-One': 1, 'Parallel': 1, 'Sequential': 1}
         
-        # Add One-by-One result(s)
-        if result_onebyones and "error" not in result_onebyones:
-            label = f"One-by-One #{strategy_counter['One-by-One']}"
-            flat_itineraries.append((label, result_onebyones))
-            strategy_counter['One-by-One'] += 1
+        # Helper to unpack all top plans
+        def add_strategy_results(strategy_name, result):
+            if not result or "error" in result:
+                return
+            if "all_top_itineraries" in result:
+                for it in result["all_top_itineraries"]:
+                    label = f"{strategy_name} #{strategy_counter[strategy_name]}"
+                    flat_itineraries.append((label, it))
+                    strategy_counter[strategy_name] += 1
+            else:
+                label = f"{strategy_name} #{strategy_counter[strategy_name]}"
+                flat_itineraries.append((label, result))
+                strategy_counter[strategy_name] += 1
         
-        # Add Parallel result(s)
-        if result_parallel and "error" not in result_parallel:
-            label = f"Parallel #{strategy_counter['Parallel']}"
-            flat_itineraries.append((label, result_parallel))
-            strategy_counter['Parallel'] += 1
-        
-        # Add Sequential result(s)
-        if result_sequential and "error" not in result_sequential:
-            label = f"Sequential #{strategy_counter['Sequential']}"
-            flat_itineraries.append((label, result_sequential))
-            strategy_counter['Sequential'] += 1
+        add_strategy_results('One-by-One', result_onebyones)
+        add_strategy_results('Parallel', result_parallel)
+        add_strategy_results('Sequential', result_sequential)
         
         if not flat_itineraries:
             print("❌ No valid itineraries to select from")
             return None
         
-        budget = trip_details.get('budget_inr') or 150000
+        budget = trip_details.get('budget_inr', 150000)
         
         # Rank itineraries using flat list
         ranker = ItineraryRanker(budget)
@@ -3612,24 +3614,36 @@ Examples:
             return None
         
         # Display and get selection
-        if interactive:
-            selector = ItinerarySelector()
-            selected = selector.display_and_select(ranked, budget, trip_details)
+        selector = ItinerarySelector()
+        selected = selector.display_and_select(ranked, budget, trip_details)
+        
+        if selected:
+            strategy_name, full_itinerary = selected
             
-            if selected:
-                strategy_name, full_itinerary = selected
-                # Display the selected itinerary
-                selector.display_selected(strategy_name, full_itinerary)
+            # Embed the top 3 into full_itinerary so the frontend Web UI can see them!
+            top_3_data = []
+            for r_name, r_summary in ranked[:3]:
+                # simplify to save tokens and break circular references
+                it_copy = dict(r_summary.full_data)
                 
-                # Save to database
-                self.save_selected_itinerary(strategy_name, full_itinerary, trip_details, user_id)
+                # IMPORTANT: Remove circular paths!
+                it_copy.pop('all_top_itineraries', None)
+                it_copy.pop('top_3_options', None)
                 
-                return (strategy_name, full_itinerary)
+                it_copy['strategy_name'] = r_name
+                top_3_data.append(it_copy)
             
-            return None
-        else:
-            # If not interactive (API call), just return the top 3 itineraries grouped together
-            return [(name, summary.full_data) for name, summary in ranked[:3]]
+            # Clean root object's circulars just in case
+            full_itinerary.pop('all_top_itineraries', None)
+            
+            full_itinerary['top_3_options'] = top_3_data
+            
+            # Save to database focusing on the top recommended plan
+            self.save_selected_itinerary(strategy_name, full_itinerary, trip_details, user_id)
+            
+            return (strategy_name, full_itinerary)
+        
+        return None
     
     def save_selected_itinerary(
         self,
@@ -3699,7 +3713,7 @@ Examples:
                     sys.stdout.register(writer)
                     sys.stderr.register(writer)
                     try:
-                        return self.generate_itinerary(trip_details, interactive=False)
+                        return self.generate_itinerary(trip_details)
                     finally:
                         sys.stdout.unregister()
                         sys.stderr.unregister()
@@ -3721,7 +3735,7 @@ Examples:
                         # Stream the terminal logs smoothly, ~3 chars at a time
                         for i in range(0, len(safe_val), 3):
                             yield safe_val[i:i+3]
-                            # await asyncio.sleep(0.005)
+                            await asyncio.sleep(0.005)
                     except asyncio.TimeoutError:
                         if thread_task.done():
                             break
@@ -3742,13 +3756,6 @@ Examples:
                         'query': query,
                         'result_summary': 'Itinerary generated'
                     })
-                    
-                    # Store the top 3 in memory so the selection API can retrieve it
-                    if result:
-                        self.temp_itineraries[user_id] = {
-                            "trip_details": trip_details,
-                            "options": result
-                        }
 
                 yield "\n✅ Optimization complete! Formatting your schedule...\n\n"
                 import json
@@ -3757,15 +3764,15 @@ Examples:
                      return
                 
                 try:
-                    json_str = json.dumps(result, default=str)[:15000]
+                    json_str = json.dumps(result, default=str)[:60000]
                     prompt = (
-                        "You are a master Travel Agent. I have computed up to 3 optimal multi-day travel itineraries. "
-                        "Format the following JSON itineraries beautifully. YOU MUST clearly distinguish them into 3 options using the precise headings:\n"
-                        "'Itinerary 1:', 'Itinerary 2:', and 'Itinerary 3:'. Provide each one separately.\n"
-                        "For each option, give it a Title on the next line. Include a summary of Budget, duration in days, and quick highlights. "
-                        "Ensure the options appear as three separate blocks. Be friendly. Explicitly list the detailed schedule with times, places, prices, and total budget information.\n\n"
+                        "You are a master Travel Agent. I have computed up to 3 optimal multi-day travel itinerary options for the user. "
+                        "Format ALL 3 of the following JSON itineraries (found under 'top_3_options') into beautiful, detailed day-by-day markdown schedules. Use emojis. "
+                        "You MUST prefix each distinct option with exactly the text 'Option 1:', 'Option 2:', and 'Option 3:' so the frontend regex parser can locate them. "
+                        "Inside each Option, you MUST include 'Title: [Name of Trip]', 'Budget: [Total Cost]', and 'Days: [Number of Days]'. "
+                        "After the metadata, explicitly list the detailed schedule with times, places, and prices for EVERY option to let the user review and choose.\n\n"
                         f"USER QUERY: {query}\n\n"
-                        f"JSON ITINERARIES:\n{json_str}"
+                        f"JSON ITINERARY:\n{json_str}"
                     )
                     
                     from langchain_core.messages import HumanMessage
@@ -3775,7 +3782,7 @@ Examples:
                         for i, word in enumerate(words):
                             yield word + (' ' if i < len(words) - 1 else '')
                             # Adding tiny delay to make buffering less likely to chunk paragraphs
-                            # await asyncio.sleep(0.005)
+                            await asyncio.sleep(0.005)
                 except Exception as e:
                     import traceback
                     traceback.print_exc()

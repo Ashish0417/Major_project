@@ -20,8 +20,8 @@ interface Message {
 
 function parseItineraries(text: string): Itinerary[] {
   // Parse itineraries from AI response
-  // This is a simplified parser - adjust based on your actual API response format
-  const itineraryPattern = /(?:Itinerary|Option)\s*(\d+)[:\s]+([\s\S]*?)(?=(?:Itinerary|Option)\s*\d+|$)/gi
+  // Tolerates markdown like **Option 1**, # Option 1:, Option 1 - etc.
+  const itineraryPattern = /(?:Itinerary|Option)\s*(\d+)[*:\s-]*([\s\S]*?)(?=(?:Itinerary|Option)\s*\d+|$)/gi
   const matches = [...text.matchAll(itineraryPattern)]
   
   if (matches.length === 0) return []
@@ -31,8 +31,8 @@ function parseItineraries(text: string): Itinerary[] {
     const lines = content.split("\n").filter(l => l.trim())
     
     // Extract details from the content
-    const titleMatch = content.match(/(?:Title|Name)[:\s]+(.+)/i)
-    const budgetMatch = content.match(/(?:Budget|Cost|Price)[:\s]+(.+)/i)
+    const titleMatch = content.match(/(?:Title|Name)[*:\s-]+([^*\n]+)/i)
+    const budgetMatch = content.match(/(?:Budget|Cost|Price|Total)[*:\s-]+([^*\n]+)/i)
     const daysMatch = content.match(/(\d+)\s*(?:days?|nights?)/i)
     
     return {

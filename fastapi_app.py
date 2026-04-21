@@ -482,7 +482,7 @@ from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, EmailStr
 import jwt
-from passlib.context import CryptContext
+import bcrypt
 from datetime import datetime, timedelta
 
 from llm_orchestrator import TravelItineraryOrchestrator
@@ -506,7 +506,6 @@ history_manager = orchestrator.history_manager
 # ================= AUTH =================
 SECRET_KEY = "super-secret-key"
 ALGORITHM = "HS256"
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ================= MODELS =================
 class SignupRequest(BaseModel):
@@ -534,10 +533,11 @@ class ModelFeedbackRequest(BaseModel):
 
 # ================= UTILS =================
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 def verify_password(p, h):
-    return pwd_context.verify(p, h)
+    return bcrypt.checkpw(p.encode('utf-8'), h.encode('utf-8'))
 
 def create_access_token(data: dict):
     to_encode = data.copy()

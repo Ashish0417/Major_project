@@ -57,10 +57,16 @@ class ItineraryRanker:
             List of (strategy_name, summary) tuples sorted by score (best first)
         """
         summaries = []
+        seen_fingerprints = set()
         
         for strategy_name, itinerary in flat_itineraries:
             if itinerary is None or 'error' in itinerary:
                 continue
+            
+            fingerprint = self._get_fingerprint(itinerary)
+            if fingerprint in seen_fingerprints:
+                continue
+            seen_fingerprints.add(fingerprint)
             
             summary = self._create_summary(strategy_name, itinerary)
             if summary:
@@ -70,6 +76,48 @@ class ItineraryRanker:
         summaries.sort(key=lambda x: self._compute_rank_score(x[1]))
         
         return summaries
+    
+    def _get_fingerprint(self, itinerary: Dict[str, Any]) -> str:
+        """Create a fingerprint based on items to deduplicate identical itineraries"""
+        try:
+            days = itinerary.get('itinerary', {})
+            parts = []
+            
+            # Incorporate cost directly to help disambiguation
+            total_cost = round(itinerary.get('total_cost', 0))
+            parts.append(f"cost:{total_cost}")
+            
+            for d in range(itinerary.get('num_days', 0)):
+                d_key = d if d in days else str(d) # Handle integer or string keys
+                if d_key in days:
+                    for item in days[d_key]:
+                        name = ""
+                        cat = ""
+                        cost = 0
+                        
+                        if isinstance(item, dict):
+                            name = item.get('name', '')
+                            cat = item.get('category', item.get('item_type', ''))
+                            cost = item.get('cost', item.get('price', 0))
+                            
+                            props = item.get('properties', {})
+                            if not name and isinstance(props, dict):
+                                name = props.get('name', '')
+                        else:
+                            name = getattr(item, 'name', '')
+                            cat = getattr(item, 'item_type', getattr(item, 'category', ''))
+                            if not name and hasattr(item, 'properties') and isinstance(item.properties, dict):
+                                name = item.properties.get('name', '')
+                            
+                            cost = getattr(item, 'cost', getattr(item, 'price', getattr(item, 'price_per_night', 0)))
+                            if hasattr(item, 'properties') and isinstance(item.properties, dict):
+                                cost = item.properties.get('cost', cost)
+                                
+                        parts.append(f"{d}:{cat}:{name}:{round(cost)}")
+            return "|".join(parts)
+        except Exception as e:
+            print(f"Fingerprint generation error: {e}")
+            return str(hash(str(itinerary)))
     
     def _create_summary(self, strategy_name: str, itinerary: Dict[str, Any]) -> Optional[ItinerarySummary]:
         """Create a summary from itinerary data"""
@@ -99,27 +147,23 @@ class ItineraryRanker:
         """
         Compute ranking score (lower is better).
         
-        Factors:
-        1. Budget efficiency (how close to budget without exceeding)
-        2. Cost per day (value for money)
-        3. Optimization score (if available)
+        Prioritizes the optimizer score (LangGraph) out of 100 first, making sure 
+        highest score ranks at the top.
         """
-        # Primary factor: cost within budget is good, exceeding is bad
+        # If we have an optimization score out of 100, we simply negate it so highest is lowest
+        if summary.score and summary.score > 0:
+            return -summary.score
+            
+        # Fallback for methods without a score out of 100
         efficiency = summary.get_budget_efficiency(self.budget)
         
-        # If within budget, reward it more than exceeding budget
         if summary.total_cost <= self.budget:
-            # Within budget: lower cost is better
-            # Normalize to 0-1 range where 1.0 = at budget
-            efficiency_score = summary.total_cost / self.budget  # 0.0 = free, 1.0 = at budget
-            cost_per_day_score = summary.get_cost_per_day() / 10000  # Normalize
-            
-            # Final score for within-budget: emphasize staying within budget more
-            score = efficiency_score * 0.6 + cost_per_day_score * 0.3 + (1 - summary.score) * 0.1 if summary.score else efficiency_score * 0.6 + cost_per_day_score * 0.4
+            efficiency_score = summary.total_cost / self.budget
+            cost_per_day_score = summary.get_cost_per_day() / 10000
+            score = efficiency_score * 0.6 + cost_per_day_score * 0.4
         else:
-            # Over budget: penalize heavily
             overage_penalty = (summary.total_cost - self.budget) / self.budget
-            score = 1.0 + overage_penalty * 2  # At least 1.0 + overage penalty
+            score = 100.0 + overage_penalty * 2  # Push highly penalized ones to the bottom
         
         return score
 
@@ -259,6 +303,8 @@ class ItinerarySelector:
         
         for day_num in range(num_days):
             items = itinerary_data.get(day_num, [])
+            if not items:
+                items = itinerary_data.get(str(day_num), [])
             
             print(f"📅 DAY {day_num + 1}")
             print("━"*80)
@@ -508,6 +554,18 @@ class ItinerarySelector:
         itineraries: List[Tuple[str, ItinerarySummary]]
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """Get user's itinerary selection"""
+        import sys
+        
+        # Auto-select the best itinerary if running in a non-interactive environment (like the web UI backend)
+        is_interactive = sys.stdin.isatty() and sys.stdout.isatty()
+        # Also check if stdout was patched by our orchestrator
+        is_patched_stdout = hasattr(sys.stdout, 'patched') or 'ThreadSafeStdout' in str(type(sys.stdout))
+        
+        if not is_interactive or is_patched_stdout:
+            print("\n🤖 Packaging the Top 3 Best Ranked Itineraries to display securely in the UI!")
+            strategy_name, summary = itineraries[0]
+            return (strategy_name, summary.full_data)
+            
         while True:
             print("="*80)
             try:
@@ -529,6 +587,10 @@ class ItinerarySelector:
             
             except ValueError:
                 self._print_error("Invalid input. Please enter a number or 'c'")
+            except EOFError:
+                print("\n🤖 Auto-selecting the best ranked itinerary due to EOF!")
+                strategy_name, summary = itineraries[0]
+                return (strategy_name, summary.full_data)
     
     def display_selected(self, strategy_name: str, itinerary: Dict[str, Any]) -> None:
         """Display the selected itinerary in detail"""
@@ -545,6 +607,8 @@ class ItinerarySelector:
         print(f"\n📋 Day-by-Day Preview:")
         for day_num in range(num_days):
             items = itinerary_data.get(day_num, [])
+            if not items:
+                items = itinerary_data.get(str(day_num), [])
             if items:
                 item_names = [getattr(item, 'name', str(item)) for item in items]
                 print(f"  Day {day_num + 1}: {', '.join(str(name)[:30] for name in item_names)}")

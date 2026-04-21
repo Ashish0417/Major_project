@@ -18,11 +18,15 @@ CHAT_HTML = """
     .bubble { margin: 10px 0; padding: 10px 12px; border-radius: 12px; display: inline-block; max-width: 80%; line-height: 1.4; }
     .user { background: #dbe8ff; align-self: flex-end; }
     .bot { background: #e8f7e4; align-self: flex-start; }
+    .bot table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+    .bot th, .bot td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+    .bot th { background-color: rgba(0,0,0,0.05); }
     .typing { font-style: italic; color: #999; }
     .row { display: flex; align-items: center; }
     .thumbs { margin-left: 10px; }
     .thumbs button { border: 1px solid #ccc; padding: 6px 10px; margin-right: 4px; border-radius: 4px; cursor: pointer; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <div class="container">
@@ -77,7 +81,11 @@ CHAT_HTML = """
   function addBubble(text, user) {
     const div = document.createElement('div');
     div.className = 'bubble ' + (user ? 'user' : 'bot');
-    div.textContent = text;
+    if (!user && window.marked) {
+      div.innerHTML = marked.parse(text);
+    } else {
+      div.textContent = text;
+    }
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }

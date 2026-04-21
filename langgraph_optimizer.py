@@ -183,6 +183,7 @@ class OptimizerState(TypedDict):
     # Results
     best_plan: Optional[Dict[str, Any]]
     best_score: float
+    top_plans: List[Dict[str, Any]]
     error: Optional[str]
     backtrack_count: int
 
@@ -464,6 +465,7 @@ class LangGraphItineraryOptimizer:
         state['evaluated_combinations'] = 0
         state['total_candidates'] = 0  # Track total candidates generated
         state['best_score'] = -1.0
+        state['top_plans'] = []
         state['backtrack_count'] = 0
         state['candidates_generated'] = False
         
@@ -656,19 +658,48 @@ class LangGraphItineraryOptimizer:
         
         logger.info(f"Evaluated plan: score={score:.1f}, violations={len(violations)}")
         
-        # Track best plan found so far
-        if score > state.get('best_score', -1):
-            state['best_score'] = score
-            state['best_plan']  = {
-                'transport':        plan.transport_option,
-                'return_transport': plan.return_transport_option,    # NEW
-                'accommodations':   plan.accommodation_options,
-                'restaurants':      plan.restaurant_options,
-                'activities':       plan.activity_options,
-                'score':            score,
-                'violations':       violations
-            }
-            logger.info(f"🏆 New best plan: {transport_name} | {transport_duration//60}h | INR {total_cost:.0f} | Score={score:.1f}")
+        plan_dict = {
+            'transport':        plan.transport_option,
+            'return_transport': plan.return_transport_option,
+            'accommodations':   plan.accommodation_options,
+            'restaurants':      plan.restaurant_options,
+            'activities':       plan.activity_options,
+            'score':            score,
+            'violations':       violations
+        }
+        
+        def _get_plan_fp(p):
+            fp = []
+            if p['transport']: fp.append(p['transport'].id)
+            if p['return_transport']: fp.append(p['return_transport'].id)
+            for a in p['accommodations']: fp.append(a.id)
+            for r in p['restaurants']: fp.append(r.id)
+            for a in p['activities']: fp.append(a.id)
+            return sorted(fp)
+            
+        current_fp = _get_plan_fp(plan_dict)
+        
+        if 'top_plans' not in state:
+            state['top_plans'] = []
+            
+        is_duplicate = False
+        for tp in state['top_plans']:
+            if _get_plan_fp(tp) == current_fp:
+                is_duplicate = True
+                break
+                
+        if not is_duplicate:
+            top_plans = state['top_plans']
+            top_plans.append(plan_dict)
+            top_plans.sort(key=lambda x: x['score'], reverse=True)
+            state['top_plans'] = top_plans[:3]  # keep top 3 internally to ensure we have enough good unique ones
+            
+            # also update best_plan for backward compatibility
+            state['best_score'] = state['top_plans'][0]['score']
+            state['best_plan'] = state['top_plans'][0]
+            
+            if score >= state['best_score']:
+                logger.info(f"🏆 New best plan: {transport_name} | {transport_duration//60}h | INR {total_cost:.0f} | Score={score:.1f}")
         
         return state
     
@@ -757,6 +788,7 @@ class LangGraphItineraryOptimizer:
             'candidates_generated': False,
             'best_plan': None,
             'best_score': -1.0,
+            'top_plans': [],
             'error': None,
             'backtrack_count': 0
         }
@@ -771,6 +803,7 @@ class LangGraphItineraryOptimizer:
         return {
             'best_plan': final_state.get('best_plan'),
             'best_score': final_state.get('best_score'),
+            'top_plans': final_state.get('top_plans', []),
             'evaluated_combinations': final_state.get('evaluated_combinations'),
             'backtrack_attempts': final_state.get('backtrack_count'),
             'error': final_state.get('error'),

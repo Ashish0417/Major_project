@@ -129,7 +129,7 @@ def test_langchain_llm():
             return False
         
         llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             temperature=0.7,
             google_api_key=api_key
         )
